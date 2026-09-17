@@ -31,7 +31,14 @@ import {
 } from "./mcp-tools.js";
 import { createLiteLLMProvider, DEFAULT_LITELLM_BASE_URL, isPlaceholderHost, toNativeModels } from "./provider.js";
 import { createSkillsPromptSection, createSkillToolDefinitions, listSkills } from "./skills.js";
-import type { LiteLLMApi, LiteLLMModel, LiteLLMModelPolicy, LiteLLMRuntimeAuth, ResolvedCredentials } from "./types.js";
+import type {
+  DiscoveryOptions,
+  LiteLLMApi,
+  LiteLLMModel,
+  LiteLLMModelPolicy,
+  LiteLLMRuntimeAuth,
+  ResolvedCredentials,
+} from "./types.js";
 
 const PROVIDER_NAME = "litellm";
 const SETTINGS_KEY = "litellm";
@@ -44,6 +51,7 @@ const ENV_TIMEOUT = "LITELLM_DISCOVERY_TIMEOUT_MS";
 const ENV_CLI_JWT_EXPIRATION_HOURS = "LITELLM_CLI_JWT_EXPIRATION_HOURS";
 const ENV_OFFLINE = "LITELLM_OFFLINE";
 const ENV_VERBOSE_DISCOVERY = "LITELLM_VERBOSE_DISCOVERY";
+const ENV_MODELS_DEV = "LITELLM_MODELS_DEV";
 const MODELS_DEV_CACHE_FILENAME = "litellm-models-dev.json";
 const DEFAULT_TIMEOUT_MS = 5000;
 const SEED_TIMEOUT_MS = 3000;
@@ -442,6 +450,16 @@ function isOffline(): boolean {
 /** Pi disables all model network access when PI_OFFLINE is set; activation must honour it too. */
 function isHostOffline(): boolean {
   return process.env.PI_OFFLINE !== undefined;
+}
+
+/**
+ * LiteLLM's /model/info is the metadata authority, so models.dev is an opt-in escape hatch.
+ * Without a cache path and with refresh suppressed, discovery reads neither the models.dev
+ * network nor a cache left by an earlier release; Pi's own catalog still applies.
+ */
+function modelsDevDiscoveryOptions(): Pick<DiscoveryOptions, "modelsDev" | "modelsDevCachePath"> {
+  if (process.env[ENV_MODELS_DEV] !== "1") return { modelsDev: false };
+  return { modelsDev: !isHostOffline(), modelsDevCachePath: join(getAgentDir(), MODELS_DEV_CACHE_FILENAME) };
 }
 
 /**
@@ -1866,8 +1884,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       signal,
       headers: auth.headers,
       allowInsecureHttp: auth.allowInsecureHttp,
-      modelsDev: !isHostOffline(),
-      modelsDevCachePath: join(getAgentDir(), MODELS_DEV_CACHE_FILENAME),
+      ...modelsDevDiscoveryOptions(),
       silent: !isVerboseDiscovery(),
       onProgress: isVerboseDiscovery() ? (message) => process.stderr.write(`LiteLLM: ${message}\n`) : undefined,
     });

@@ -399,7 +399,7 @@ function adaptPublicCatalogRecord(
   catalogModelId: string,
   record: PublicCatalogRecord | undefined,
 ): CatalogResolution {
-  const piProvider = adapterCatalogProvider(record?.provider ?? provider);
+  const piProvider = adapterCatalogProvider(record?.piProvider ?? record?.provider ?? provider);
   const resolved = piProvider
     ? (resolveCatalogModel(record?.modelId ?? catalogModelId, piProvider) ??
       resolveCatalogModel(catalogModelId, piProvider))

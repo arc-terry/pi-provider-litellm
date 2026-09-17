@@ -683,11 +683,37 @@ describe("feature parity", () => {
     await refreshProvider(pi);
 
     // Activation seeds the catalog, then the refresh discovers again; neither may touch MCP.
-    expect(new Set(requestedUrls)).toEqual(
-      new Set(["https://proxy.example.com/model/info", "https://models.dev/api.json"]),
-    );
+    // models.dev is opt-in, so neither discovery requests it either.
+    expect(new Set(requestedUrls)).toEqual(new Set(["https://proxy.example.com/model/info"]));
     expect(pi.tools.map((tool) => tool.name)).toContain("litellm_skill_list");
     expect(pi.tools.some((tool) => tool.name.startsWith("mcp_"))).toBe(false);
+  });
+
+  it("requests models.dev only when LITELLM_MODELS_DEV opts in", async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), "pi-provider-litellm-"));
+    await writeFile(join(agentDir, "settings.json"), JSON.stringify({ litellm: { mcp: { enabled: false } } }), "utf8");
+    process.env.LITELLM_BASE_URL = "https://proxy.example.com";
+    process.env.LITELLM_API_KEY = "sk-test";
+    vi.stubEnv("LITELLM_MODELS_DEV", "1");
+
+    const requestedUrls: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url.endsWith("/model/info")) return jsonResponse(200, { data: [] });
+      throw new Error(`unexpected URL: ${url}`);
+    });
+
+    try {
+      const extension = await loadExtension(agentDir);
+      const pi = createPi();
+      await extension(pi);
+      await refreshProvider(pi);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    expect(requestedUrls).toContain("https://models.dev/api.json");
   });
 
   it("registers cost tracking and session grouping handlers", async () => {

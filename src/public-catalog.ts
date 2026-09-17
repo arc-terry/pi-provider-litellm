@@ -12,6 +12,9 @@ const KNOWN_PROVIDERS = new Set<string>(getProviders());
 export interface PublicCatalogRecord {
   source: "models.dev" | "pi-vendor" | "pi-adapter";
   provider: string;
+  // The Pi catalog for fields a models.dev record omits, when the record was found
+  // under another vendor's key (ChatGPT routes read OpenAI's but bill as Codex).
+  piProvider?: string;
   modelId: string;
   limits?: { context?: number; output?: number };
   cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
@@ -54,6 +57,8 @@ const PROVIDER_ALIASES: Readonly<Record<string, readonly string[]>> = {
   azure_ai: ["azure", "openai"],
   bedrock: ["amazon-bedrock"],
   bedrock_converse: ["amazon-bedrock"],
+  // models.dev has no ChatGPT subscription provider; its routes serve OpenAI models.
+  chatgpt: ["chatgpt", "openai"],
   deepseek: ["deepseek"],
   fireworks: ["fireworks-ai"],
   fireworks_ai: ["fireworks-ai"],
@@ -199,11 +204,6 @@ function mapModelsDev(provider: string, modelId: string, model: ModelsDevModel):
 
 function toPiRecord(source: "pi-vendor" | "pi-adapter", provider: string, model: Model<Api>): PublicCatalogRecord {
   const thinkingLevelMap = model.thinkingLevelMap as Record<string, unknown> | undefined;
-  const effortLevels = thinkingLevelMap
-    ? Object.entries(thinkingLevelMap)
-        .filter(([, value]) => value !== null)
-        .map(([level]) => level)
-    : [];
   return {
     source,
     provider,
@@ -216,7 +216,6 @@ function toPiRecord(source: "pi-vendor" | "pi-adapter", provider: string, model:
       cacheWrite: model.cost.cacheWrite,
     },
     modalities: model.input.includes("image") ? ["text", "image"] : ["text"],
-    ...(effortLevels.length > 0 ? { effortLevels } : {}),
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
   };
 }
@@ -245,14 +244,17 @@ export async function loadPublicCatalog(options: LoadPublicCatalogOptions = {}):
     lookup(provider, id) {
       const providers = providerCandidates(provider);
       const ids = lookupIds(id);
+      const vendor = providers.find((candidate) => candidate !== "azure") ?? providers[0];
       for (const candidate of providers) {
         const models = catalog?.[candidate]?.models;
         for (const modelId of ids) {
           const model = models?.[modelId];
-          if (model) return mapModelsDev(candidate, modelId, model);
+          if (!model) continue;
+          const record = mapModelsDev(candidate, modelId, model);
+          if (candidate === providers[0] || !vendor) return record;
+          return { ...record, piProvider: (PI_PROVIDER_ALIASES[vendor] ?? [vendor])[0] };
         }
       }
-      const vendor = providers.find((candidate) => candidate !== "azure") ?? providers[0];
       if (vendor) {
         for (const piProvider of PI_PROVIDER_ALIASES[vendor] ?? [vendor]) {
           const model = findPiModel(piProvider, ids);

@@ -64,6 +64,8 @@ function row(overrides: Partial<ModelInfoEntry> = {}): ModelInfoEntry {
     model_info: {
       id: "deployment-a",
       mode: "chat",
+      // Described by LiteLLM's model map without a carrier; an absent list is an operator opt-in.
+      supported_openai_params: [],
       supports_reasoning: true,
       supports_vision: true,
       max_input_tokens: 200_000,
@@ -895,6 +897,27 @@ describe("reduceModelGroup", () => {
     expect(result?.thinkingLevelMap).toBeUndefined();
   });
 
+  // LiteLLM omits the list (or returns null) for an off-map deployment; only that
+  // absence is an operator opt-in. Present but malformed data is no carrier evidence.
+  it.each([
+    [undefined, true],
+    [null, true],
+    ["reasoning_effort", false],
+    [{ reasoning_effort: true }, false],
+  ])("treats supported_openai_params=%j with supports_reasoning as carrier=%s", (params, expected) => {
+    const result = reduceModelGroup(
+      [
+        row({
+          model_info: { supported_openai_params: params as never, supports_reasoning: true },
+          litellm_params: { model: "internal/reasoner" },
+        }),
+      ],
+      () => undefined,
+    );
+
+    expect(result?.acceptsResponsesReasoningControl).toBe(expected);
+  });
+
   it("intersects accepted parameters across deployments", () => {
     const result = reduceModelGroup(
       [
@@ -1278,8 +1301,9 @@ describe("reduceModelGroup", () => {
     });
   });
 
-  it("closes a level when any wildcard parent omits its level map", () => {
-    expect(intersectThinkingLevelMaps([undefined, { high: "high" }])).toEqual({ high: null });
+  it("keeps a standard level a wildcard parent leaves at Pi's default but closes extended ones", () => {
+    expect(intersectThinkingLevelMaps([undefined, { high: "high" }])).toEqual({ high: "high" });
+    expect(intersectThinkingLevelMaps([undefined, { max: "max" }])).toEqual({ max: null });
   });
 
   it("closes a level when wildcard parents disagree on its wire value", () => {
@@ -1727,7 +1751,7 @@ describe("upstream reduction regressions", () => {
     expect(result).not.toHaveProperty("thinkingLevelMap");
   });
 
-  it("uses catalog thinking maps for unambiguous identities", () => {
+  it("keeps standard levels a catalog thinking map omits at Pi's defaults", () => {
     const thinkingLevelMap = { low: "low", high: "high" } as const;
     const result = reduceModelGroup([row({ model_info: { supported_openai_params: ["reasoning_effort"] } })], () => ({
       provider: "xai",
@@ -1739,14 +1763,7 @@ describe("upstream reduction regressions", () => {
       cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
     }));
 
-    expect(result?.thinkingLevelMap).toEqual({
-      ...thinkingLevelMap,
-      off: null,
-      minimal: null,
-      medium: null,
-      xhigh: null,
-      max: null,
-    });
+    expect(result?.thinkingLevelMap).toEqual({ ...thinkingLevelMap, xhigh: null, max: null });
   });
 
   it("intersects differing catalog thinking maps per level regardless of deployment order", () => {
@@ -1770,19 +1787,11 @@ describe("upstream reduction regressions", () => {
         cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
       }));
 
-      expect(result?.thinkingLevelMap).toEqual({
-        off: "none",
-        minimal: null,
-        medium: null,
-        low: null,
-        high: "high",
-        xhigh: null,
-        max: null,
-      });
+      expect(result?.thinkingLevelMap).toEqual({ off: "none", low: null, high: "high", xhigh: null, max: null });
     }
   });
 
-  it("denies each catalog level when any deployment omits its thinking map", () => {
+  it("keeps catalog levels a deployment without a thinking map leaves at Pi's defaults", () => {
     const entries = [
       row({ model_info: { supported_openai_params: ["reasoning_effort"], id: "mapped", mode: "chat" } }),
       row({ model_info: { supported_openai_params: ["reasoning_effort"], id: "absent", mode: "chat" } }),
@@ -1799,7 +1808,7 @@ describe("upstream reduction regressions", () => {
         cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
       }));
 
-      expect(result?.thinkingLevelMap).toEqual(NO_LEVELS);
+      expect(result?.thinkingLevelMap).toEqual({ low: "low", high: "high", xhigh: null, max: null });
     }
   });
 
@@ -1909,14 +1918,7 @@ describe("upstream reduction regressions", () => {
       }),
     );
 
-    expect(result?.thinkingLevelMap).toEqual({
-      ...catalogThinkingLevelMap,
-      minimal: null,
-      medium: null,
-      xhigh: null,
-      max: null,
-      low: null,
-    });
+    expect(result?.thinkingLevelMap).toEqual({ ...catalogThinkingLevelMap, xhigh: null, max: null, low: null });
   });
 
   it("merges different rates at identical tier thresholds conservatively regardless of order", () => {

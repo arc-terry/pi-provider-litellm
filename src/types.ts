@@ -63,6 +63,8 @@ export interface DiscoveryOptions {
   signal?: AbortSignal;
   headers?: Record<string, string>;
   allowInsecureHttp?: boolean;
+  // `false` reads only an existing cache at `modelsDevCachePath`; with no cache
+  // path, models.dev is not consulted at all.
   modelsDev?: boolean;
   modelsDevCachePath?: string;
 }
@@ -89,6 +91,7 @@ export interface ModelInfoEntry {
     max_input_tokens?: number;
     max_output_tokens?: number;
     supports_reasoning?: boolean;
+    reasoning_effort_levels?: string[];
     supports_none_reasoning_effort?: boolean;
     supports_minimal_reasoning_effort?: boolean;
     supports_low_reasoning_effort?: boolean;
