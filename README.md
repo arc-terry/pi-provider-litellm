@@ -345,7 +345,9 @@ The ` (incomplete metadata)` suffix marks reduced `/model/info` groups, incomple
 
 ### Reasoning controls
 
-Reasoning levels require deployment evidence for the parameter Pi sends: `reasoning_effort` for effort levels or `thinking` for a native thinking switch. Public route names never authorize these controls. Evidence-free fallback models retain catalog presentation metadata but expose no speculative selector.
+Reasoning levels require deployment evidence for the parameter Pi sends: `reasoning_effort` for effort levels or `thinking` for a native thinking switch. Public route names never authorize these controls.
+
+LiteLLM omits `supported_openai_params` for a deployment its model map does not describe. Such a deployment keeps the `reasoning_effort` carrier when its `model_info` explicitly sets `supports_reasoning: true`, which is the operator's opt-in. A `supported_openai_params` list that omits `reasoning_effort` still denies effort levels unless `litellm_params.allowed_openai_params` adds it. Kimi and DeepSeek generations are excluded because their contracts name their own carriers. Evidence-free fallback models retain catalog presentation metadata but expose no speculative selector.
 
 Kimi K2.5/K2.6 use an on/off thinking switch; K2.7 Code/Highspeed is always thinking. Kimi K3 and DeepSeek V4 use public effort evidence with LiteLLM overrides. Responses levels are translated to valid `reasoning.effort` values; Chat-only compatibility fields never reach Responses models. Legacy cached level maps remain usable while discovery refreshes, and stored Moonshot compatibility can restore safe display normalization.
 

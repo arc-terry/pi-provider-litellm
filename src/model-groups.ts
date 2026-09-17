@@ -254,6 +254,17 @@ function acceptedParams(entry: ModelInfoEntry): Set<string> {
   return params;
 }
 
+// LiteLLM omits supported_openai_params for a deployment its model map does not
+// describe, so that omission says nothing about the carrier. An explicit
+// `supports_reasoning: true` is the operator's opt-in there, as in LiteLLM's own
+// effort resolution, and keeps Pi's `reasoning_effort` carrier.
+function optsIntoEffortCarrier(entry: ModelInfoEntry): boolean {
+  return (
+    !Array.isArray(entry.model_info?.supported_openai_params) &&
+    wireBoolean(entry.model_info?.supports_reasoning) === true
+  );
+}
+
 function intersectParams(entries: readonly ModelInfoEntry[]): string[] {
   const [first, ...rest] = entries.map(acceptedParams);
   if (!first) return [];
@@ -843,7 +854,16 @@ export function reduceModelGroup(
     if (tiers) cost.tiers = tiers;
   }
   const acceptedOpenAIParams = intersectParams(deployments);
-  const acceptsResponsesReasoningControl = acceptedOpenAIParams.includes("reasoning_effort");
+  // Kimi and DeepSeek generations name their own carriers, so an operator opt-in
+  // cannot substitute for the parameter evidence their contracts require.
+  const namedCarrierFamily = catalogs.some((catalog) =>
+    ["kimi", "deepseek", "conflicting"].includes(catalog?.semanticFamily ?? ""),
+  );
+  const acceptsResponsesReasoningControl =
+    acceptedOpenAIParams.includes("reasoning_effort") ||
+    (!namedCarrierFamily &&
+      deployments.length > 0 &&
+      deployments.every((entry) => acceptedParams(entry).has("reasoning_effort") || optsIntoEffortCarrier(entry)));
   const publicEfforts = catalogAuthority.map((catalog) => catalog?.effortLevels);
   const evidenceLevelMap = reasoningLevelMap(deployments, publicEfforts, [
     intersectThinkingLevelMaps(catalogAuthority.map((catalog) => catalog?.thinkingLevelMap)),

@@ -156,6 +156,21 @@ describe("native provider stream compatibility", () => {
     for (const field of absent) expect(requests[0]).not.toHaveProperty(field);
   });
 
+  it("sends reasoning_effort for an off-map deployment that opts into reasoning", async () => {
+    const { models, model, requests, respond } = await createCompatibilityHarness([
+      {
+        model_name: "private-reasoner",
+        litellm_params: { model: "internal/reasoner" },
+        model_info: { mode: "chat", supports_reasoning: true },
+      },
+    ]);
+    respond(...successfulResponse("ok"));
+
+    await models.streamSimple(model, { messages: [user("Think")] }, { reasoning: "medium" }).result();
+
+    expect(requests[0]).toMatchObject({ reasoning_effort: "medium" });
+  });
+
   it("exposes and sends only the router-reported high effort", async () => {
     const { models, model, requests, respond } = await createCompatibilityHarness([
       {
@@ -670,7 +685,7 @@ describe("advertised levels serialize on both APIs", () => {
       {
         model_name: "prop-route",
         litellm_params: { model: backend, ...(params ? { allowed_openai_params: params } : {}) },
-        model_info: { id: "d1", mode, supports_reasoning: true },
+        model_info: { id: "d1", mode, supported_openai_params: [], supports_reasoning: true },
       },
     ]);
 

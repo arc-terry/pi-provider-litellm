@@ -3407,7 +3407,9 @@ describe("discoverModels via /model/info", () => {
     expect(writes.join("\n")).toContain("internal/mixed-tool-route");
   });
 
-  it("denies Chat reasoning levels without an accepted carrier", async () => {
+  // Issue #184: LiteLLM omits supported_openai_params for a deployment its model map
+  // does not describe, so an explicit supports_reasoning is the operator's opt-in.
+  it("keeps Pi's standard levels for an off-map deployment that opts into reasoning", async () => {
     mockEndpoints({
       "/model/info": () =>
         jsonResponse(200, {
@@ -3416,6 +3418,32 @@ describe("discoverModels via /model/info", () => {
               model_name: "opaque-chat-reasoner",
               litellm_params: { model: "internal/reasoner" },
               model_info: { id: "one", mode: "chat", supports_reasoning: true },
+            },
+          ],
+        }),
+    });
+
+    const result = await discoverModels("https://litellm.example.com", "sk-test", {});
+    const model = { ...result.models[0]!, provider: "litellm", baseUrl: "https://proxy.example.com" };
+
+    expect(model.compat).toMatchObject({ supportsReasoningEffort: true });
+    expect(getSupportedThinkingLevels(model)).toEqual(["off", "minimal", "low", "medium", "high"]);
+  });
+
+  it("denies Chat reasoning levels without an accepted carrier", async () => {
+    mockEndpoints({
+      "/model/info": () =>
+        jsonResponse(200, {
+          data: [
+            {
+              model_name: "opaque-chat-reasoner",
+              litellm_params: { model: "internal/reasoner" },
+              model_info: {
+                id: "one",
+                mode: "chat",
+                supported_openai_params: ["temperature"],
+                supports_reasoning: true,
+              },
             },
           ],
         }),
@@ -4908,6 +4936,7 @@ describe("discoverModels wildcard expansion via /v1/models", () => {
               model_info: {
                 id: "wildcard",
                 mode: "chat",
+                supported_openai_params: [],
                 supports_reasoning: true,
                 supports_vision: false,
                 max_input_tokens: 200_000,
@@ -6166,6 +6195,7 @@ describe("native Messages discovery", () => {
                 id: "uuid-claude",
                 mode: "chat",
                 litellm_provider: "anthropic",
+                supported_openai_params: [],
                 supports_reasoning: true,
                 supports_high_reasoning_effort: true,
               },

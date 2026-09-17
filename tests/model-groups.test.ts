@@ -64,6 +64,8 @@ function row(overrides: Partial<ModelInfoEntry> = {}): ModelInfoEntry {
     model_info: {
       id: "deployment-a",
       mode: "chat",
+      // Described by LiteLLM's model map without a carrier; an absent list is an operator opt-in.
+      supported_openai_params: [],
       supports_reasoning: true,
       supports_vision: true,
       max_input_tokens: 200_000,

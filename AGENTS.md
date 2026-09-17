@@ -75,6 +75,7 @@
 - Discovered `litellmPolicy` scopes request and response behavior to backend evidence; route text never authorizes generation controls or request-side visibility parameters.
 - Share bounded backend identity parsing across catalog, family, and generation decisions. Generic adapter labels do not override an identified backend vendor; custom Azure authority wins over a generic OpenAI adapter.
 - Every level in `THINKING_LEVEL_DEFINITIONS` has a LiteLLM support flag, including `medium` and `high`; LiteLLM 1.86 emits `supports_medium_reasoning_effort` and `supports_high_reasoning_effort`. Derive the flag table from that one definition rather than restating it, or a level goes unread.
+- An absent `supported_openai_params` list plus explicit `supports_reasoning: true` is an operator opt-in to the `reasoning_effort` carrier (LiteLLM omits the list for deployments outside its model map). A declared list without the carrier still denies, and Kimi/DeepSeek families never take the opt-in.
 - Null/absent flags have no opinion; explicit denials win and extended effort levels need explicit support. A router flag is the more specific evidence, so an explicit `true` grants a level over a catalog map that denies it.
 - Close thinking levels against the protocol and accepted carrier actually used after wildcard expansion. Responses compatibility contains only Responses fields.
 
