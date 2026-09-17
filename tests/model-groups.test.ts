@@ -1727,7 +1727,7 @@ describe("upstream reduction regressions", () => {
     expect(result).not.toHaveProperty("thinkingLevelMap");
   });
 
-  it("uses catalog thinking maps for unambiguous identities", () => {
+  it("keeps standard levels a catalog thinking map omits at Pi's defaults", () => {
     const thinkingLevelMap = { low: "low", high: "high" } as const;
     const result = reduceModelGroup([row({ model_info: { supported_openai_params: ["reasoning_effort"] } })], () => ({
       provider: "xai",
@@ -1739,14 +1739,7 @@ describe("upstream reduction regressions", () => {
       cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
     }));
 
-    expect(result?.thinkingLevelMap).toEqual({
-      ...thinkingLevelMap,
-      off: null,
-      minimal: null,
-      medium: null,
-      xhigh: null,
-      max: null,
-    });
+    expect(result?.thinkingLevelMap).toEqual({ ...thinkingLevelMap, xhigh: null, max: null });
   });
 
   it("intersects differing catalog thinking maps per level regardless of deployment order", () => {
@@ -1770,15 +1763,7 @@ describe("upstream reduction regressions", () => {
         cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
       }));
 
-      expect(result?.thinkingLevelMap).toEqual({
-        off: "none",
-        minimal: null,
-        medium: null,
-        low: null,
-        high: "high",
-        xhigh: null,
-        max: null,
-      });
+      expect(result?.thinkingLevelMap).toEqual({ off: "none", low: null, high: "high", xhigh: null, max: null });
     }
   });
 
@@ -1799,7 +1784,7 @@ describe("upstream reduction regressions", () => {
         cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
       }));
 
-      expect(result?.thinkingLevelMap).toEqual(NO_LEVELS);
+      expect(result?.thinkingLevelMap).toEqual({ low: null, high: null, xhigh: null, max: null });
     }
   });
 
@@ -1909,14 +1894,7 @@ describe("upstream reduction regressions", () => {
       }),
     );
 
-    expect(result?.thinkingLevelMap).toEqual({
-      ...catalogThinkingLevelMap,
-      minimal: null,
-      medium: null,
-      xhigh: null,
-      max: null,
-      low: null,
-    });
+    expect(result?.thinkingLevelMap).toEqual({ ...catalogThinkingLevelMap, xhigh: null, max: null, low: null });
   });
 
   it("merges different rates at identical tier thresholds conservatively regardless of order", () => {

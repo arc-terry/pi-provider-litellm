@@ -199,11 +199,6 @@ function mapModelsDev(provider: string, modelId: string, model: ModelsDevModel):
 
 function toPiRecord(source: "pi-vendor" | "pi-adapter", provider: string, model: Model<Api>): PublicCatalogRecord {
   const thinkingLevelMap = model.thinkingLevelMap as Record<string, unknown> | undefined;
-  const effortLevels = thinkingLevelMap
-    ? Object.entries(thinkingLevelMap)
-        .filter(([, value]) => value !== null)
-        .map(([level]) => level)
-    : [];
   return {
     source,
     provider,
@@ -216,7 +211,6 @@ function toPiRecord(source: "pi-vendor" | "pi-adapter", provider: string, model:
       cacheWrite: model.cost.cacheWrite,
     },
     modalities: model.input.includes("image") ? ["text", "image"] : ["text"],
-    ...(effortLevels.length > 0 ? { effortLevels } : {}),
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
   };
 }

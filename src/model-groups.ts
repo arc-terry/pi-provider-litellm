@@ -200,10 +200,15 @@ function reasoningLevelMap(
       map[level] = publicSets.every((set) => set.has(level)) ? (level === "off" ? "none" : level) : null;
     }
   }
-  // A catalog level map is direct evidence even when its selectable projection
-  // is empty. Preserve its denials independently from public effort lists, whose
-  // unrecognized values intentionally have no opinion.
-  for (const catalogMap of catalogMaps) Object.assign(map, deniedLevels(catalogMap));
+  // A catalog level map is not a complete list: a null denies, a value supplies the
+  // wire spelling, and an omitted standard level keeps Pi's default. Flattening it
+  // into a list denied every standard level a map left implicit, such as Codex
+  // `gpt-5.6-sol`, which only states `xhigh`, `max`, and `minimal`.
+  for (const catalogMap of catalogMaps) {
+    for (const [level, value] of Object.entries(catalogMap ?? {}) as [keyof typeof map, string | null][]) {
+      if (value === null || (value !== undefined && map[level] !== null)) map[level] = value;
+    }
+  }
 
   for (const [level, flag] of Object.entries(LITELLM_LEVEL_FLAGS) as Array<
     [keyof typeof LITELLM_LEVEL_FLAGS, (typeof LITELLM_LEVEL_FLAGS)[keyof typeof LITELLM_LEVEL_FLAGS]]
@@ -831,15 +836,7 @@ export function reduceModelGroup(
   }
   const acceptedOpenAIParams = intersectParams(deployments);
   const acceptsResponsesReasoningControl = acceptedOpenAIParams.includes("reasoning_effort");
-  const publicEfforts = catalogAuthority.map(
-    (catalog) =>
-      catalog?.effortLevels ??
-      (catalog?.thinkingLevelMap
-        ? Object.entries(catalog.thinkingLevelMap)
-            .filter(([, value]) => value !== null)
-            .map(([level]) => level)
-        : undefined),
-  );
+  const publicEfforts = catalogAuthority.map((catalog) => catalog?.effortLevels);
   const evidenceLevelMap = reasoningLevelMap(deployments, publicEfforts, [
     intersectThinkingLevelMaps(catalogAuthority.map((catalog) => catalog?.thinkingLevelMap)),
   ]);
@@ -933,11 +930,6 @@ export function catalogResolution(provider: string, model: Model<Api>): CatalogR
     provider,
     catalogModelId: model.id,
     reasoning: model.reasoning,
-    effortLevels: model.thinkingLevelMap
-      ? Object.entries(model.thinkingLevelMap)
-          .filter(([, value]) => value !== null)
-          .map(([level]) => level)
-      : undefined,
     thinkingLevelMap: model.thinkingLevelMap,
     vision: model.input.includes("image"),
     contextWindow: model.contextWindow,

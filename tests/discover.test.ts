@@ -1077,6 +1077,35 @@ describe("discoverModels via /model/info", () => {
     });
   });
 
+  // Issue #182: the Codex catalog map states only xhigh, max, and minimal, so the
+  // standard levels it omits must stay at Pi's defaults rather than be denied.
+  it("keeps standard levels a Codex catalog map leaves implicit", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(200, {
+        data: [
+          {
+            model_name: "gpt-5.6-sol",
+            litellm_params: { model: "chatgpt/gpt-5.6-sol" },
+            model_info: {
+              mode: "responses",
+              litellm_provider: "chatgpt",
+              supported_openai_params: ["reasoning_effort"],
+              supports_reasoning: null,
+              supports_minimal_reasoning_effort: false,
+              supports_xhigh_reasoning_effort: true,
+              supports_max_reasoning_effort: true,
+            },
+          },
+        ],
+      }),
+    );
+
+    const result = await discoverModels("https://litellm.example.com", "sk-test", { modelsDev: false });
+    const model = { ...result.models[0]!, provider: "litellm", baseUrl: "https://proxy.example.com" };
+
+    expect(getSupportedThinkingLevels(model)).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
+  });
+
   it("merges singleton router effort flags into supported Responses levels", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse(200, {

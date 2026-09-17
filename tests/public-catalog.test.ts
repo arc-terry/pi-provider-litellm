@@ -72,13 +72,16 @@ describe("loadPublicCatalog", () => {
     });
   });
 
-  it("derives effort levels from non-null Pi thinking levels", async () => {
+  // A Pi map omits standard levels it leaves at Pi's defaults, so it is not a complete list.
+  it("carries a Pi thinking level map without flattening it into effort levels", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => response({})),
     );
     const catalog = await loadWithFreshCache();
-    expect(catalog.lookup("azure", "gpt-5")?.effortLevels).toEqual(expect.arrayContaining(["low", "medium", "high"]));
+    const record = catalog.lookup("chatgpt", "gpt-5.6-sol");
+    expect(record?.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max", minimal: "low" });
+    expect(record).not.toHaveProperty("effortLevels");
   });
 
   it("reads Bedrock Claude evidence from models.dev", async () => {
