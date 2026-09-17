@@ -2620,6 +2620,41 @@ describe("discoverModels via /model/info", () => {
     });
   });
 
+  // models.dev serves ChatGPT routes from OpenAI's key, but a field it omits must
+  // still come from the subscription's Codex catalog, not OpenAI API pricing.
+  it("keeps Codex catalog pricing for a partial models.dev ChatGPT record", async () => {
+    vi.resetModules();
+    const { discoverModels: isolatedDiscoverModels } = await import("../src/discover.js");
+    mockEndpoints({
+      "/model/info": () =>
+        jsonResponse(200, {
+          data: [
+            {
+              model_name: "gpt-5.6-sol",
+              litellm_params: { model: "chatgpt/gpt-5.6-sol" },
+              model_info: {
+                mode: "responses",
+                litellm_provider: "chatgpt",
+                supported_openai_params: ["reasoning_effort"],
+              },
+            },
+          ],
+        }),
+      "models.dev/api.json": () =>
+        jsonResponse(200, {
+          openai: {
+            models: { "gpt-5.6-sol": { reasoning_options: [{ type: "effort", values: ["none", "low", "high"] }] } },
+          },
+        }),
+    });
+
+    const result = await isolatedDiscoverModels("https://litellm.example.com", "sk-test", {
+      modelsDevCachePath: join(await mkdtemp(join(agentDir, "public-efforts-")), "models-dev.json"),
+    });
+
+    expect(result.models[0]?.cost).toMatchObject({ input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 });
+  });
+
   it.each(["azure", "azure_ai"])(
     "uses custom %s authority for public reasoning efforts over a generic adapter",
     async (customProvider) => {

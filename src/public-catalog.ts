@@ -12,6 +12,9 @@ const KNOWN_PROVIDERS = new Set<string>(getProviders());
 export interface PublicCatalogRecord {
   source: "models.dev" | "pi-vendor" | "pi-adapter";
   provider: string;
+  // The Pi catalog for fields a models.dev record omits, when the record was found
+  // under another vendor's key (ChatGPT routes read OpenAI's but bill as Codex).
+  piProvider?: string;
   modelId: string;
   limits?: { context?: number; output?: number };
   cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
@@ -241,14 +244,17 @@ export async function loadPublicCatalog(options: LoadPublicCatalogOptions = {}):
     lookup(provider, id) {
       const providers = providerCandidates(provider);
       const ids = lookupIds(id);
+      const vendor = providers.find((candidate) => candidate !== "azure") ?? providers[0];
       for (const candidate of providers) {
         const models = catalog?.[candidate]?.models;
         for (const modelId of ids) {
           const model = models?.[modelId];
-          if (model) return mapModelsDev(candidate, modelId, model);
+          if (!model) continue;
+          const record = mapModelsDev(candidate, modelId, model);
+          if (candidate === providers[0] || !vendor) return record;
+          return { ...record, piProvider: (PI_PROVIDER_ALIASES[vendor] ?? [vendor])[0] };
         }
       }
-      const vendor = providers.find((candidate) => candidate !== "azure") ?? providers[0];
       if (vendor) {
         for (const piProvider of PI_PROVIDER_ALIASES[vendor] ?? [vendor]) {
           const model = findPiModel(piProvider, ids);

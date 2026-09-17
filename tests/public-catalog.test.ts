@@ -92,6 +92,7 @@ describe("loadPublicCatalog", () => {
     expect(catalog.lookup("chatgpt", "gpt-5.6-sol")).toMatchObject({
       source: "models.dev",
       provider: "openai",
+      piProvider: "openai-codex",
       effortLevels: ["none", "low", "medium", "high", "xhigh", "max"],
     });
   });
