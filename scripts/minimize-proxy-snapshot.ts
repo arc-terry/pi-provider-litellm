@@ -19,6 +19,7 @@ const MODEL_INFO = [
   "max_output_tokens",
   "supports_reasoning",
   "supports_vision",
+  "reasoning_effort_levels",
   "supports_none_reasoning_effort",
   "supports_minimal_reasoning_effort",
   "supports_low_reasoning_effort",
