@@ -11,6 +11,7 @@ import {
   DEFAULT_MAX_TOKENS,
   defaultContextWindow,
   hasMixedIncompatibleDeploymentModes,
+  isFallbackContextWindow,
   type MessagesBackendCompat,
   meetVendorCompat,
   normalizedMode,
@@ -231,7 +232,9 @@ export function enrichCachedModel(input: Model<Api>): Model<Api> {
     }),
   } as Model<Api>;
   // Reduced deployment groups use a distinct marker; this sentinel remains
-  // exclusive to evidence-free fallback models that may be enriched safely.
+  // exclusive to evidence-free fallback models that may be enriched safely. A window is
+  // fallback evidence when it matches either default, so a cached entry still qualifies
+  // after an operator configures LITELLM_DEFAULT_CONTEXT_WINDOW.
   if (
     !model.name.endsWith(" (no metadata)") ||
     model.reasoning ||
@@ -243,13 +246,15 @@ export function enrichCachedModel(input: Model<Api>): Model<Api> {
     model.cost.cacheRead !== 0 ||
     model.cost.cacheWrite !== 0 ||
     model.cost.tiers !== undefined ||
-    model.contextWindow !== defaultContextWindow() ||
+    !isFallbackContextWindow(model.contextWindow) ||
     model.maxTokens !== DEFAULT_MAX_TOKENS
   ) {
     return model;
   }
   const catalogModel = findCatalogModel(model.id);
-  if (!catalogModel) return model;
+  // The gate above proved this window is an assumption, so it is re-derived rather than
+  // restored: the cache is seeded offline, where discovery never re-reads the setting.
+  if (!catalogModel) return { ...model, contextWindow: defaultContextWindow() };
   // Match evidence-free discovery: only an explicit Responses catalog transport
   // changes the protocol; all other catalog APIs continue through Chat.
   const api = catalogModel.api === "openai-responses" ? "openai-responses" : "openai-completions";

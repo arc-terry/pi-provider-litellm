@@ -329,6 +329,45 @@ describe("moonshotPolicy", () => {
   });
 });
 
+describe("enrichCachedModel fallback context window", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  const cachedFallback = (contextWindow: number, id = "private-route") =>
+    cachedReasoningModel("openai-completions", {
+      id,
+      name: `${id} (no metadata)`,
+      reasoning: false,
+      contextWindow,
+    });
+
+  it("re-applies the configured default to a model cached under the old one", () => {
+    vi.stubEnv("LITELLM_DEFAULT_CONTEXT_WINDOW", "922000");
+
+    expect(enrichCachedModel(cachedFallback(128_000))).toMatchObject({ contextWindow: 922_000 });
+    // A window already stored under the setting is left where it is.
+    expect(enrichCachedModel(cachedFallback(922_000))).toMatchObject({ contextWindow: 922_000 });
+  });
+
+  it("still enriches a cached fallback from the catalog after the setting changes", () => {
+    vi.stubEnv("LITELLM_DEFAULT_CONTEXT_WINDOW", "922000");
+
+    const enriched = enrichCachedModel(cachedFallback(128_000, "claude-haiku-4-5"));
+
+    // Catalog evidence outranks the fallback; the setting only fills a gap.
+    expect(enriched.name).not.toContain("(no metadata)");
+    expect(enriched.contextWindow).not.toBe(922_000);
+  });
+
+  it("leaves a model that carries real metadata alone", () => {
+    vi.stubEnv("LITELLM_DEFAULT_CONTEXT_WINDOW", "922000");
+
+    // A window matching neither default is partial enrichment, not an assumption.
+    expect(enrichCachedModel(cachedFallback(128_001))).toMatchObject({ contextWindow: 128_001 });
+    const measured = cachedReasoningModel("openai-completions", { reasoning: false, contextWindow: 64_000 });
+    expect(enrichCachedModel(measured)).toMatchObject({ contextWindow: 64_000 });
+  });
+});
+
 describe("enrichCachedModel reasoning policy", () => {
   it("removes a stale thinking level map from a cached non-reasoning model", () => {
     const enriched = enrichCachedModel(
