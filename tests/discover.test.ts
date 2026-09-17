@@ -1106,6 +1106,36 @@ describe("discoverModels via /model/info", () => {
     expect(getSupportedThinkingLevels(model)).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
   });
 
+  // Issue #167: LiteLLM reads a declared level list whole, ahead of null flags.
+  it("reads a declared reasoning_effort_levels list as the complete level set", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(200, {
+        data: [
+          {
+            model_name: "zai-org/GLM-5.3",
+            litellm_params: { model: "hosted_vllm/zai-org/GLM-5.3", allowed_openai_params: ["reasoning_effort"] },
+            model_info: {
+              mode: "chat",
+              supports_reasoning: true,
+              reasoning_effort_levels: ["none", "low", "high", "max"],
+              supports_none_reasoning_effort: null,
+              supports_minimal_reasoning_effort: null,
+              supports_low_reasoning_effort: null,
+              supports_xhigh_reasoning_effort: null,
+              supports_max_reasoning_effort: null,
+            },
+          },
+        ],
+      }),
+    );
+
+    const result = await discoverModels("https://litellm.example.com", "sk-test", { modelsDev: false });
+    const model = { ...result.models[0]!, provider: "litellm", baseUrl: "https://proxy.example.com" };
+
+    expect(getSupportedThinkingLevels(model)).toEqual(["off", "low", "high", "max"]);
+    expect(model.thinkingLevelMap).toMatchObject({ off: "none", max: "max" });
+  });
+
   it("merges singleton router effort flags into supported Responses levels", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse(200, {

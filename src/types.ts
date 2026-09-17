@@ -89,6 +89,7 @@ export interface ModelInfoEntry {
     max_input_tokens?: number;
     max_output_tokens?: number;
     supports_reasoning?: boolean;
+    reasoning_effort_levels?: string[];
     supports_none_reasoning_effort?: boolean;
     supports_minimal_reasoning_effort?: boolean;
     supports_low_reasoning_effort?: boolean;

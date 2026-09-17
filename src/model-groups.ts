@@ -181,6 +181,17 @@ function normalizeEffort(level: string): (typeof EXTENDED_LEVELS)[number] | unde
   return EXTENDED_LEVELS.find((candidate) => candidate === normalized);
 }
 
+// LiteLLM reads a declared `reasoning_effort_levels` list whole, ahead of the
+// per-level flags, because flags cannot state a set such as low/high/max: medium
+// has no opt-out. A declared list therefore answers every level for its deployment.
+function reportedLevel(entry: ModelInfoEntry, level: (typeof EXTENDED_LEVELS)[number]): boolean | undefined {
+  const declared: unknown = entry.model_info?.reasoning_effort_levels;
+  if (Array.isArray(declared)) {
+    return declared.some((effort) => typeof effort === "string" && normalizeEffort(effort) === level);
+  }
+  return wireBoolean(entry.model_info?.[LITELLM_LEVEL_FLAGS[level]]);
+}
+
 // A public effort list is complete: listed standard levels are enabled and omitted
 // ones are denied. Without a public list, standard levels stay absent so Pi keeps
 // its defaults. LiteLLM flags may add or remove levels, while xhigh/max always
@@ -210,18 +221,15 @@ function reasoningLevelMap(
     }
   }
 
-  for (const [level, flag] of Object.entries(LITELLM_LEVEL_FLAGS) as Array<
-    [keyof typeof LITELLM_LEVEL_FLAGS, (typeof LITELLM_LEVEL_FLAGS)[keyof typeof LITELLM_LEVEL_FLAGS]]
-  >) {
-    const reported = entries.map((entry) => wireBoolean(entry.model_info?.[flag]));
+  for (const level of EXTENDED_LEVELS) {
+    const reported = entries.map((entry) => reportedLevel(entry, level));
     if (reported.some((value) => value === false)) map[level] = null;
     else if (reported.length > 0 && reported.every((value) => value === true)) {
       map[level] = level === "off" ? "none" : level;
     }
   }
   for (const level of ["xhigh", "max"] as const) {
-    const flag = LITELLM_LEVEL_FLAGS[level];
-    if (!entries.every((entry) => wireBoolean(entry.model_info?.[flag]) === true)) map[level] = null;
+    if (!entries.every((entry) => reportedLevel(entry, level) === true)) map[level] = null;
   }
   return map;
 }
@@ -845,10 +853,8 @@ export function reduceModelGroup(
     thinkingLevelMap = intersectThinkingLevelMaps(catalogs.map((catalog) => catalog?.messagesThinkingLevelMap));
     // Native serializer restrictions apply even when catalog pricing is withheld.
     // Router flags can also deny Pi's implicit default levels, never add a level.
-    for (const [level, flag] of Object.entries(LITELLM_LEVEL_FLAGS) as Array<
-      [keyof typeof LITELLM_LEVEL_FLAGS, (typeof LITELLM_LEVEL_FLAGS)[keyof typeof LITELLM_LEVEL_FLAGS]]
-    >) {
-      const reported = deployments.map((entry) => wireBoolean(entry.model_info?.[flag]));
+    for (const level of EXTENDED_LEVELS) {
+      const reported = deployments.map((entry) => reportedLevel(entry, level));
       if (
         reported.some((value) => value === false) ||
         ((level === "xhigh" || level === "max") &&
@@ -883,9 +889,7 @@ export function reduceModelGroup(
   const semanticMap = semanticReasoningPolicy.thinkingLevelMap;
   const hasEvidenceLevels = Object.values(evidenceLevelMap ?? {}).some((level) => level !== null);
   const semanticBinary = semanticReasoningPolicy.compat?.supportsReasoningEffort === false && !hasEvidenceLevels;
-  const explicitOffDenial = deployments.some(
-    (entry) => wireBoolean(entry.model_info?.supports_none_reasoning_effort) === false,
-  );
+  const explicitOffDenial = deployments.some((entry) => reportedLevel(entry, "off") === false);
   const reasoningPolicy = semanticMap
     ? {
         ...semanticReasoningPolicy,
