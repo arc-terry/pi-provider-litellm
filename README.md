@@ -176,6 +176,7 @@ Native Messages authenticates with `x-api-key`; every transport carries the `x-l
 | `LITELLM_DISCOVERY_TIMEOUT_MS` | `5000` | Background and explicit discovery fetch timeout in ms; `0` disables automatic discovery |
 | `LITELLM_CLI_JWT_EXPIRATION_HOURS` | `24` | CLI SSO token lifetime fallback for older proxies whose poll response omits `expires_in`; mirror a non-default proxy setting locally |
 | `LITELLM_VERBOSE_DISCOVERY` | unset | If `1`, enable progress messages during model and MCP discovery (login, refresh, startup), including MCP prepared/registered/dropped counts. Progress messages are off by default; MCP safety diagnostics (see below) are always reported regardless of this setting |
+| `LITELLM_DEFAULT_CONTEXT_WINDOW` | `128000` | Context window assumed when neither LiteLLM's `/model/info` nor the catalog reports `max_input_tokens`. Set a positive integer for proxies whose custom aliases carry no metadata; an unset or unusable value keeps 128K |
 | `LITELLM_MODELS_DEV` | unset | If `1`, enrich discovered metadata (limits, prices, effort lists) from models.dev, cached for 28 days in `litellm-models-dev.json`. Off by default because LiteLLM's `/model/info` is authoritative; use it when LiteLLM's model map lacks a model's metadata |
 
 Only use a trusted `LITELLM_API_KEY_HELPER` or `!command`. Prefer an absolute executable path, keep secrets out of command arguments, and print only the token to stdout without logging it to stderr.

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   type CatalogResolution,
   type CatalogResolver,
@@ -476,6 +476,22 @@ describe("reduceModelGroup", () => {
       contextWindow: 128_000,
       maxTokens: 16_384,
     });
+  });
+
+  it.each([
+    ["922000", 922_000],
+    ["", 128_000],
+    ["not-a-number", 128_000],
+    ["0", 128_000],
+    ["-1", 128_000],
+  ])("uses LITELLM_DEFAULT_CONTEXT_WINDOW=%j as the fallback window", (configured, expected) => {
+    vi.stubEnv("LITELLM_DEFAULT_CONTEXT_WINDOW", configured);
+    const noLimits = row({ model_info: { id: "only", mode: "chat", max_input_tokens: undefined } });
+
+    // Only the missing limit is filled; a reported window still wins.
+    expect(reduceModelGroup([noLimits], () => undefined)).toMatchObject({ contextWindow: expected });
+    const reported = row({ model_info: { id: "only", mode: "chat", max_input_tokens: 8_000 } });
+    expect(reduceModelGroup([reported], () => undefined)).toMatchObject({ contextWindow: 8_000 });
   });
 
   it.each([

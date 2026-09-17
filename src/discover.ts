@@ -8,8 +8,8 @@ import {
   catalogResolution,
   closeSerializerPolicy,
   conservativeCostTiers,
-  DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_TOKENS,
+  defaultContextWindow,
   hasMixedIncompatibleDeploymentModes,
   type MessagesBackendCompat,
   meetVendorCompat,
@@ -243,7 +243,7 @@ export function enrichCachedModel(input: Model<Api>): Model<Api> {
     model.cost.cacheRead !== 0 ||
     model.cost.cacheWrite !== 0 ||
     model.cost.tiers !== undefined ||
-    model.contextWindow !== DEFAULT_CONTEXT_WINDOW ||
+    model.contextWindow !== defaultContextWindow() ||
     model.maxTokens !== DEFAULT_MAX_TOKENS
   ) {
     return model;
@@ -720,7 +720,7 @@ function mapFromModelsList(entry: ModelsListEntry): DiscoveredModel | undefined 
     }),
     input: catalogModel?.input ?? ["text"],
     cost: catalogModel?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: catalogModel?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+    contextWindow: catalogModel?.contextWindow ?? defaultContextWindow(),
     maxTokens: catalogModel?.maxTokens ?? DEFAULT_MAX_TOKENS,
     api,
     litellmDiscoveryVersion: LITELLM_DISCOVERY_VERSION,

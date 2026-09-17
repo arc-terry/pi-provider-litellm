@@ -2,7 +2,17 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { intersectThinkingLevelMaps, THINKING_LEVEL_DEFINITIONS } from "./thinking-levels.js";
 import type { DiscoveredModel, ModelInfoEntry } from "./types.js";
 
-export const DEFAULT_CONTEXT_WINDOW = 128_000;
+const BUILTIN_CONTEXT_WINDOW = 128_000;
+
+/**
+ * Context window used when neither /model/info nor the catalog reports one.
+ * LITELLM_DEFAULT_CONTEXT_WINDOW raises it for proxies whose model map cannot
+ * populate `max_input_tokens`; an unset or unusable value keeps the 128K default.
+ */
+export function defaultContextWindow(): number {
+  const parsed = Number.parseInt(process.env.LITELLM_DEFAULT_CONTEXT_WINDOW ?? "", 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : BUILTIN_CONTEXT_WINDOW;
+}
 export const DEFAULT_MAX_TOKENS = 16_384;
 
 export type SemanticFamily = "claude" | "deepseek" | "gemini" | "kimi" | "openai";
@@ -801,7 +811,7 @@ export function reduceModelGroup(
     (entry) => wireBoolean(entry.model_info?.supports_reasoning) === false,
   );
   const vision = visionEvidence.every((value) => value ?? false);
-  const contextWindow = min(contextWindowEvidence.map((value) => value ?? DEFAULT_CONTEXT_WINDOW));
+  const contextWindow = min(contextWindowEvidence.map((value) => value ?? defaultContextWindow()));
   const maxTokens = min(maxTokensEvidence.map((value) => value ?? DEFAULT_MAX_TOKENS));
 
   const costValues = COST_FIELDS.map((field) =>
