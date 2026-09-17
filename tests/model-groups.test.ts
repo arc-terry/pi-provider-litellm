@@ -897,6 +897,27 @@ describe("reduceModelGroup", () => {
     expect(result?.thinkingLevelMap).toBeUndefined();
   });
 
+  // LiteLLM omits the list (or returns null) for an off-map deployment; only that
+  // absence is an operator opt-in. Present but malformed data is no carrier evidence.
+  it.each([
+    [undefined, true],
+    [null, true],
+    ["reasoning_effort", false],
+    [{ reasoning_effort: true }, false],
+  ])("treats supported_openai_params=%j with supports_reasoning as carrier=%s", (params, expected) => {
+    const result = reduceModelGroup(
+      [
+        row({
+          model_info: { supported_openai_params: params as never, supports_reasoning: true },
+          litellm_params: { model: "internal/reasoner" },
+        }),
+      ],
+      () => undefined,
+    );
+
+    expect(result?.acceptsResponsesReasoningControl).toBe(expected);
+  });
+
   it("intersects accepted parameters across deployments", () => {
     const result = reduceModelGroup(
       [

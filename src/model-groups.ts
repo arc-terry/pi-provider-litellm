@@ -254,15 +254,13 @@ function acceptedParams(entry: ModelInfoEntry): Set<string> {
   return params;
 }
 
-// LiteLLM omits supported_openai_params for a deployment its model map does not
-// describe, so that omission says nothing about the carrier. An explicit
-// `supports_reasoning: true` is the operator's opt-in there, as in LiteLLM's own
-// effort resolution, and keeps Pi's `reasoning_effort` carrier.
+// LiteLLM omits supported_openai_params (or returns null) for a deployment its
+// model map does not describe, so that absence says nothing about the carrier. An
+// explicit `supports_reasoning: true` is the operator's opt-in there, as in
+// LiteLLM's own effort resolution. Present but malformed data is not an absence.
 function optsIntoEffortCarrier(entry: ModelInfoEntry): boolean {
-  return (
-    !Array.isArray(entry.model_info?.supported_openai_params) &&
-    wireBoolean(entry.model_info?.supports_reasoning) === true
-  );
+  const supported: unknown = entry.model_info?.supported_openai_params;
+  return (supported === undefined || supported === null) && wireBoolean(entry.model_info?.supports_reasoning) === true;
 }
 
 function intersectParams(entries: readonly ModelInfoEntry[]): string[] {
