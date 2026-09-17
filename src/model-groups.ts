@@ -2,7 +2,32 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { intersectThinkingLevelMaps, THINKING_LEVEL_DEFINITIONS } from "./thinking-levels.js";
 import type { DiscoveredModel, ModelInfoEntry } from "./types.js";
 
-export const DEFAULT_CONTEXT_WINDOW = 128_000;
+const BUILTIN_CONTEXT_WINDOW = 128_000;
+
+/**
+ * Context window used when neither /model/info nor the catalog reports one.
+ * LITELLM_DEFAULT_CONTEXT_WINDOW raises it for proxies whose model map cannot
+ * populate `max_input_tokens`; an unset or unusable value keeps the 128K default.
+ */
+export function defaultContextWindow(): number {
+  // Number, not parseInt: parseInt takes a numeric prefix, so `1.5` would become a
+  // 1-token window and `922000junk` would pass as a limit instead of being rejected.
+  const parsed = Number(process.env.LITELLM_DEFAULT_CONTEXT_WINDOW ?? "");
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : BUILTIN_CONTEXT_WINDOW;
+}
+
+/**
+ * Whether a stored window is one this extension assumed rather than read. A model cached
+ * under the built-in default must still read as evidence-free once an operator configures
+ * LITELLM_DEFAULT_CONTEXT_WINDOW, or the setting would never reach cached entries.
+ * ponytail: a window stored under a setting that was later lowered is indistinguishable
+ * from measured evidence and stays until the next online discovery; persist a fallback
+ * marker on the model if that ever matters.
+ */
+export function isFallbackContextWindow(contextWindow: number): boolean {
+  return contextWindow === BUILTIN_CONTEXT_WINDOW || contextWindow === defaultContextWindow();
+}
+
 export const DEFAULT_MAX_TOKENS = 16_384;
 
 export type SemanticFamily = "claude" | "deepseek" | "gemini" | "kimi" | "openai";
@@ -801,7 +826,7 @@ export function reduceModelGroup(
     (entry) => wireBoolean(entry.model_info?.supports_reasoning) === false,
   );
   const vision = visionEvidence.every((value) => value ?? false);
-  const contextWindow = min(contextWindowEvidence.map((value) => value ?? DEFAULT_CONTEXT_WINDOW));
+  const contextWindow = min(contextWindowEvidence.map((value) => value ?? defaultContextWindow()));
   const maxTokens = min(maxTokensEvidence.map((value) => value ?? DEFAULT_MAX_TOKENS));
 
   const costValues = COST_FIELDS.map((field) =>
