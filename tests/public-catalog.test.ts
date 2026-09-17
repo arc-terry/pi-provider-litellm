@@ -72,6 +72,30 @@ describe("loadPublicCatalog", () => {
     });
   });
 
+  // models.dev has no `chatgpt` provider; ChatGPT subscription routes serve OpenAI models.
+  it("looks up ChatGPT routes under OpenAI on models.dev", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        response({
+          openai: {
+            models: {
+              "gpt-5.6-sol": {
+                reasoning_options: [{ type: "effort", values: ["none", "low", "medium", "high", "xhigh", "max"] }],
+              },
+            },
+          },
+        }),
+      ),
+    );
+    const catalog = await loadWithFreshCache();
+    expect(catalog.lookup("chatgpt", "gpt-5.6-sol")).toMatchObject({
+      source: "models.dev",
+      provider: "openai",
+      effortLevels: ["none", "low", "medium", "high", "xhigh", "max"],
+    });
+  });
+
   // A Pi map omits standard levels it leaves at Pi's defaults, so it is not a complete list.
   it("carries a Pi thinking level map without flattening it into effort levels", async () => {
     vi.stubGlobal(

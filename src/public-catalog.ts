@@ -54,6 +54,8 @@ const PROVIDER_ALIASES: Readonly<Record<string, readonly string[]>> = {
   azure_ai: ["azure", "openai"],
   bedrock: ["amazon-bedrock"],
   bedrock_converse: ["amazon-bedrock"],
+  // models.dev has no ChatGPT subscription provider; its routes serve OpenAI models.
+  chatgpt: ["chatgpt", "openai"],
   deepseek: ["deepseek"],
   fireworks: ["fireworks-ai"],
   fireworks_ai: ["fireworks-ai"],
