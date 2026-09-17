@@ -1280,8 +1280,9 @@ describe("reduceModelGroup", () => {
     });
   });
 
-  it("closes a level when any wildcard parent omits its level map", () => {
-    expect(intersectThinkingLevelMaps([undefined, { high: "high" }])).toEqual({ high: null });
+  it("keeps a standard level a wildcard parent leaves at Pi's default but closes extended ones", () => {
+    expect(intersectThinkingLevelMaps([undefined, { high: "high" }])).toEqual({ high: "high" });
+    expect(intersectThinkingLevelMaps([undefined, { max: "max" }])).toEqual({ max: null });
   });
 
   it("closes a level when wildcard parents disagree on its wire value", () => {
@@ -1769,7 +1770,7 @@ describe("upstream reduction regressions", () => {
     }
   });
 
-  it("denies each catalog level when any deployment omits its thinking map", () => {
+  it("keeps catalog levels a deployment without a thinking map leaves at Pi's defaults", () => {
     const entries = [
       row({ model_info: { supported_openai_params: ["reasoning_effort"], id: "mapped", mode: "chat" } }),
       row({ model_info: { supported_openai_params: ["reasoning_effort"], id: "absent", mode: "chat" } }),
@@ -1786,7 +1787,7 @@ describe("upstream reduction regressions", () => {
         cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
       }));
 
-      expect(result?.thinkingLevelMap).toEqual({ low: null, high: null, xhigh: null, max: null });
+      expect(result?.thinkingLevelMap).toEqual({ low: "low", high: "high", xhigh: null, max: null });
     }
   });
 
