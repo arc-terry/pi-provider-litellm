@@ -160,6 +160,19 @@ describe("predictions", () => {
     ).toMatchObject({ off: expected, low: expected, high: expected });
   });
 
+  it("applies a catalog level map as tristate evidence", () => {
+    expect(
+      reasoningPrediction(
+        {
+          model_name: "route-gpt",
+          litellm_params: { model: "openai/route-gpt", allowed_openai_params: ["reasoning_effort"] } as never,
+        },
+        undefined,
+        { off: null, minimal: null, xhigh: "xhigh" },
+      ),
+    ).toEqual({ off: false, minimal: false, low: true, medium: true, high: true, xhigh: false, max: false });
+  });
+
   it("treats omitted standard levels as unavailable when a public effort list exists", () => {
     expect(
       reasoningPrediction(

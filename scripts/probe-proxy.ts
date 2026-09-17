@@ -250,6 +250,7 @@ export function protocolPrediction(row: BackendIdentityRow): string {
 export function reasoningPrediction(
   row: BackendIdentityRow,
   publicEfforts: readonly string[] | undefined,
+  catalogMap?: Record<string, unknown>,
 ): Partial<Record<ReasoningLevel, boolean>> {
   if (!allowedReasoning(row)) return Object.fromEntries(LEVELS.map((level) => [level, false]));
   const declared = (row.model_info as JsonObject | undefined)?.reasoning_effort_levels;
@@ -270,6 +271,13 @@ export function reasoningPrediction(
       normalizedPublicEfforts.length > 0 ? publicSet.has(level) : true,
     ]),
   );
+  // A catalog map is tristate, as in discovery: a null denies, a value keeps a level
+  // the public list did not deny, and an omitted level keeps the default.
+  for (const level of LEVELS) {
+    const value = catalogMap?.[level];
+    if (value === null) predictions[level] = false;
+    else if (value !== undefined && predictions[level] !== false) predictions[level] = true;
+  }
   for (const [flag, value] of Object.entries(reasoningFlags(row))) {
     const effort = flag.slice("supports_".length, -"_reasoning_effort".length);
     const level = effort === "none" ? "off" : (effort as ReasoningLevel);
@@ -347,7 +355,7 @@ export async function probeDiscovery(options: ProbeOptions): Promise<ProbeReport
         [...flagNames].map((flag) => [flag, group.every((row) => reasoningFlags(row)[flag] === true)]),
       );
       const reasoningPredictions = group.map((row, index) =>
-        reasoningPrediction(row, publicRecords[index]?.effortLevels),
+        reasoningPrediction(row, publicRecords[index]?.effortLevels, publicRecords[index]?.thinkingLevelMap),
       );
       return {
         id: model.id,
