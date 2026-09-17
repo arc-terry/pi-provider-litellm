@@ -176,6 +176,7 @@ Native Messages authenticates with `x-api-key`; every transport carries the `x-l
 | `LITELLM_DISCOVERY_TIMEOUT_MS` | `5000` | Background and explicit discovery fetch timeout in ms; `0` disables automatic discovery |
 | `LITELLM_CLI_JWT_EXPIRATION_HOURS` | `24` | CLI SSO token lifetime fallback for older proxies whose poll response omits `expires_in`; mirror a non-default proxy setting locally |
 | `LITELLM_VERBOSE_DISCOVERY` | unset | If `1`, enable progress messages during model and MCP discovery (login, refresh, startup), including MCP prepared/registered/dropped counts. Progress messages are off by default; MCP safety diagnostics (see below) are always reported regardless of this setting |
+| `LITELLM_MODELS_DEV` | unset | If `1`, enrich discovered metadata (limits, prices, effort lists) from models.dev, cached for 28 days in `litellm-models-dev.json`. Off by default because LiteLLM's `/model/info` is authoritative; use it when LiteLLM's model map lacks a model's metadata |
 
 Only use a trusted `LITELLM_API_KEY_HELPER` or `!command`. Prefer an absolute executable path, keep secrets out of command arguments, and print only the token to stdout without logging it to stderr.
 
@@ -293,7 +294,7 @@ Before tagging a release, keep `package.json` and `package-lock.json` versions i
 
 Dynamic catalogs are persisted by Pi in `~/.pi/agent/models-store.json`. Credentials remain in `~/.pi/agent/auth.json`. Legacy `litellm-models.json` model caches are ignored and never deleted. `litellm-models-dev.json` is the models.dev cache and is refreshed in place.
 
-For every genuine `/model/info` row, including deployment details fetched through `/health`, the extension requests `https://models.dev/api.json` for enrichment and caches the result for 28 days in `~/.pi/agent/litellm-models-dev.json`. Health-only entries without deployment details use the bounded Pi catalog lookup without models.dev enrichment. `PI_OFFLINE` suppresses activation-time discovery and the models.dev request. `LITELLM_OFFLINE=1` also disables LiteLLM discovery; direct discovery callers use only an existing models.dev cache and do not refresh it.
+LiteLLM's `/model/info` is the metadata authority, so models.dev enrichment is an opt-in escape hatch. With `LITELLM_MODELS_DEV=1`, for every genuine `/model/info` row, including deployment details fetched through `/health`, the extension requests `https://models.dev/api.json` for enrichment and caches the result for 28 days in `~/.pi/agent/litellm-models-dev.json`. Without it, discovery neither requests models.dev nor reads that cache; Pi's own catalog still applies. Health-only entries without deployment details use the bounded Pi catalog lookup without models.dev enrichment. `PI_OFFLINE` suppresses activation-time discovery and the models.dev request. `LITELLM_OFFLINE=1` also disables LiteLLM discovery; direct discovery callers use only an existing models.dev cache and do not refresh it.
 
 Opening `/model` refreshes configured provider catalogs in the background using Pi's native model lifecycle.
 
