@@ -79,6 +79,12 @@ describe("resolveBackendIdentity", () => {
         litellm_params: { model: "openai/gpt-4o", custom_llm_provider: "anthropic" },
       }),
     ).toBeUndefined();
+    // Routing providers conflict too, not just family vendors; so do prefixes we don't recognize.
+    for (const model of ["vertex_ai/claude-sonnet-4", "bedrock/anthropic.claude-3", "groq/llama-3.3-70b"]) {
+      expect(
+        resolveBackendIdentity({ model_name: "route", litellm_params: { model, custom_llm_provider: "sagemaker" } }),
+      ).toBeUndefined();
+    }
     // A generic adapter is transport, so it cannot contradict the prefix.
     expect(
       resolveBackendIdentity({
@@ -94,7 +100,7 @@ describe("resolveBackendIdentity", () => {
     ).toMatchObject({ provider: "fireworks_ai", family: "kimi" });
   });
 
-  it("treats a non-vendor first segment as model path when custom_llm_provider routes it", () => {
+  it("treats a known model-path first segment as path when custom_llm_provider routes it", () => {
     // LiteLLM prepends custom_llm_provider when the first segment differs, so this is
     // `fireworks_ai/accounts/fireworks/models/kimi-k2p6`, not a provider named "accounts".
     expect(
