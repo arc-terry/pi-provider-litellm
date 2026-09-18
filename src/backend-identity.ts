@@ -62,14 +62,20 @@ export function resolveBackendIdentity(row: BackendIdentityRow): BackendIdentity
     wireString(row.model_info?.base_model) ?? wireString(row.litellm_params?.model) ?? wireString(row.model_name);
   if (!raw) return undefined;
 
-  const slash = raw.indexOf("/");
+  let slash = raw.indexOf("/");
   const prefix = slash > 0 ? raw.slice(0, slash).trim().toLowerCase() : undefined;
-  const prefixProvider = prefix && !GENERIC_ADAPTERS.has(prefix) ? prefix : undefined;
+  let prefixProvider = prefix && !GENERIC_ADAPTERS.has(prefix) ? prefix : undefined;
   // `custom_llm_provider` is how LiteLLM routes an unprefixed model. It is provider evidence
-  // in its own right, so a prefix that names a different provider is a conflict, not a tiebreak.
+  // in its own right, so a prefix that names a different vendor is a conflict, not a tiebreak.
+  // Any other differing first segment is model path: LiteLLM prepends custom_llm_provider, so
+  // Fireworks' "accounts/fireworks/models/x" is not a provider named "accounts".
   const custom = wireString(row.litellm_params?.custom_llm_provider)?.toLowerCase();
   const customProvider = custom && !GENERIC_ADAPTERS.has(custom) ? custom : undefined;
-  if (prefixProvider && customProvider && prefixProvider !== customProvider) return undefined;
+  if (prefixProvider && customProvider && prefixProvider !== customProvider) {
+    if (KNOWN_VENDOR_PREFIXES.has(prefixProvider)) return undefined;
+    prefixProvider = undefined;
+    slash = -1;
+  }
   const provider = prefixProvider ?? customProvider;
   const modelId = slash > 0 ? raw.slice(slash + 1) : raw;
   // Scan the full "prefix/modelId" string only when the prefix is itself a whole known vendor

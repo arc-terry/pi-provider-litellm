@@ -3419,6 +3419,27 @@ describe("discoverModels via /model/info", () => {
     expect(result.models[0]?.litellmPolicy?.normalizeStrictToolMessages).toBe(true);
   });
 
+  it("applies Kimi compat to a Fireworks account-scoped path routed by custom_llm_provider", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    mockEndpoints({
+      "/model/info": () =>
+        jsonResponse(200, {
+          data: [
+            {
+              model_name: "fireworks/kimi-k2p6",
+              litellm_params: { model: "accounts/fireworks/models/kimi-k2p6", custom_llm_provider: "fireworks_ai" },
+              model_info: { id: "one", mode: "chat" },
+            },
+          ],
+        }),
+    });
+
+    const result = await discoverModels("https://litellm.example.com", "sk-test", {});
+
+    expect(result.models[0]?.compat).toMatchObject({ maxTokensField: "max_tokens", supportsStrictMode: false });
+    expect(stderr.mock.calls.flat().join(" ")).not.toContain("conflicting deployment family evidence");
+  });
+
   it("keeps strict repair but withholds visibility suppression for mixed Kimi thinking modes", async () => {
     mockEndpoints({
       "/model/info": () =>

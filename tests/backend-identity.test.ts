@@ -94,6 +94,22 @@ describe("resolveBackendIdentity", () => {
     ).toMatchObject({ provider: "fireworks_ai", family: "kimi" });
   });
 
+  it("treats a non-vendor first segment as model path when custom_llm_provider routes it", () => {
+    // LiteLLM prepends custom_llm_provider when the first segment differs, so this is
+    // `fireworks_ai/accounts/fireworks/models/kimi-k2p6`, not a provider named "accounts".
+    expect(
+      resolveBackendIdentity({
+        model_name: "fireworks/kimi-k2p6",
+        litellm_params: { model: "accounts/fireworks/models/kimi-k2p6", custom_llm_provider: "fireworks_ai" },
+      }),
+    ).toEqual({
+      provider: "fireworks_ai",
+      modelId: "accounts/fireworks/models/kimi-k2p6",
+      qualifiedId: "fireworks_ai/accounts/fireworks/models/kimi-k2p6",
+      family: "kimi",
+    });
+  });
+
   it("recognizes the settled OpenAI-family spelling", () => {
     for (const id of [
       "openai/gpt-5",
