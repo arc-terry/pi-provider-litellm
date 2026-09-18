@@ -19,6 +19,10 @@ type ThinkingLevelDefinitionsAreExhaustive = AssertNever<
 
 type ThinkingLevelMap = DiscoveredModel["thinkingLevelMap"];
 
+// Pi sends an omitted standard level as its own name. An omitted `off` sends no
+// disable value and omitted `xhigh`/`max` are unsupported, so those stay distinct.
+const IMPLICIT_LEVELS = new Set<string>(["minimal", "low", "medium", "high"]);
+
 // Intersects independently authoritative maps. A level mentioned by any source
 // is denied unless every source supplies the same mapping for that level.
 export function intersectThinkingLevelMaps(maps: readonly ThinkingLevelMap[]): ThinkingLevelMap {
@@ -26,8 +30,9 @@ export function intersectThinkingLevelMaps(maps: readonly ThinkingLevelMap[]): T
 
   const intersection: NonNullable<ThinkingLevelMap> = {};
   for (const [level] of THINKING_LEVEL_DEFINITIONS) {
-    const values = maps.map((map) => map?.[level]);
-    if (values.every((value) => value === undefined)) continue;
+    const stated = maps.map((map) => map?.[level]);
+    if (stated.every((value) => value === undefined)) continue;
+    const values = stated.map((value) => (value === undefined && IMPLICIT_LEVELS.has(level) ? level : value));
     const first = values[0];
     intersection[level] = first !== undefined && values.every((value) => value === first) ? first : null;
   }

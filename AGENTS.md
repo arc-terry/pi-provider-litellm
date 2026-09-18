@@ -36,8 +36,9 @@
   groups with deployment details use ` (incomplete metadata)`, which remains ineligible for route-name enrichment.
 - Keep `LITELLM_OFFLINE` and `LITELLM_DISCOVERY_TIMEOUT_MS` behavior compatible with README docs.
 - Stored Pi `/login litellm` credentials take precedence over `LITELLM_API_KEY`.
-- Pi stores discovered models in `models-store.json`; models.dev enrichment uses `litellm-models-dev.json` with a
-  28-day cache window under the Pi agent dir.
+- Pi stores discovered models in `models-store.json`; models.dev enrichment is opt-in with `LITELLM_MODELS_DEV=1` and
+  uses `litellm-models-dev.json` with a 28-day cache window under the Pi agent dir. When it is off, discovery must not
+  read that cache either.
 - Pi owns discovered-model persistence in `models-store.json`; this extension does not write a model cache. Legacy `litellm-models.json` model caches are ignored and never deleted. `litellm-models-dev.json` is the models.dev cache and is refreshed in place.
 - Google ADC is resolved in process through `src/gcloud-token.ts`; there is no helper subprocess and no `src/gcloud-token-cli.ts`. Only `authorized_user` credentials are supported, and service accounts warn and fail closed.
 - `apiKey.check` performs no network call, so it reports credential shape, not mintability. Its source label must mirror the precedence in `resolveCredentials`, so ADC is named whenever a complete ADC file exists; if the refresh token no longer mints, `resolve` falls back and reports the credential it actually used.
@@ -75,6 +76,9 @@
 - Discovered `litellmPolicy` scopes request and response behavior to backend evidence; route text never authorizes generation controls or request-side visibility parameters.
 - Share bounded backend identity parsing across catalog, family, and generation decisions. Generic adapter labels do not override an identified backend vendor; custom Azure authority wins over a generic OpenAI adapter.
 - Every level in `THINKING_LEVEL_DEFINITIONS` has a LiteLLM support flag, including `medium` and `high`; LiteLLM 1.86 emits `supports_medium_reasoning_effort` and `supports_high_reasoning_effort`. Derive the flag table from that one definition rather than restating it, or a level goes unread.
+- An absent `supported_openai_params` list plus explicit `supports_reasoning: true` is an operator opt-in to the `reasoning_effort` carrier (LiteLLM omits the list for deployments outside its model map). A declared list without the carrier still denies, and Kimi/DeepSeek families never take the opt-in.
+- A declared `reasoning_effort_levels` list answers every level for its deployment, ahead of the per-level flags.
+- Catalog level maps are tristate, not complete lists: an omitted standard level keeps Pi's default.
 - Null/absent flags have no opinion; explicit denials win and extended effort levels need explicit support. A router flag is the more specific evidence, so an explicit `true` grants a level over a catalog map that denies it.
 - Close thinking levels against the protocol and accepted carrier actually used after wildcard expansion. Responses compatibility contains only Responses fields.
 

@@ -329,6 +329,45 @@ describe("moonshotPolicy", () => {
   });
 });
 
+describe("enrichCachedModel fallback context window", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  const cachedFallback = (contextWindow: number, id = "private-route") =>
+    cachedReasoningModel("openai-completions", {
+      id,
+      name: `${id} (no metadata)`,
+      reasoning: false,
+      contextWindow,
+    });
+
+  it("re-applies the configured default to a model cached under the old one", () => {
+    vi.stubEnv("LITELLM_DEFAULT_CONTEXT_WINDOW", "922000");
+
+    expect(enrichCachedModel(cachedFallback(128_000))).toMatchObject({ contextWindow: 922_000 });
+    // A window already stored under the setting is left where it is.
+    expect(enrichCachedModel(cachedFallback(922_000))).toMatchObject({ contextWindow: 922_000 });
+  });
+
+  it("still enriches a cached fallback from the catalog after the setting changes", () => {
+    vi.stubEnv("LITELLM_DEFAULT_CONTEXT_WINDOW", "922000");
+
+    const enriched = enrichCachedModel(cachedFallback(128_000, "claude-haiku-4-5"));
+
+    // Catalog evidence outranks the fallback; the setting only fills a gap.
+    expect(enriched.name).not.toContain("(no metadata)");
+    expect(enriched.contextWindow).not.toBe(922_000);
+  });
+
+  it("leaves a model that carries real metadata alone", () => {
+    vi.stubEnv("LITELLM_DEFAULT_CONTEXT_WINDOW", "922000");
+
+    // A window matching neither default is partial enrichment, not an assumption.
+    expect(enrichCachedModel(cachedFallback(128_001))).toMatchObject({ contextWindow: 128_001 });
+    const measured = cachedReasoningModel("openai-completions", { reasoning: false, contextWindow: 64_000 });
+    expect(enrichCachedModel(measured)).toMatchObject({ contextWindow: 64_000 });
+  });
+});
+
 describe("enrichCachedModel reasoning policy", () => {
   it("removes a stale thinking level map from a cached non-reasoning model", () => {
     const enriched = enrichCachedModel(
@@ -1075,6 +1114,65 @@ describe("discoverModels via /model/info", () => {
       xhigh: "xhigh",
       max: "max",
     });
+  });
+
+  // Issue #182: the Codex catalog map states only xhigh, max, and minimal, so the
+  // standard levels it omits must stay at Pi's defaults rather than be denied.
+  it("keeps standard levels a Codex catalog map leaves implicit", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(200, {
+        data: [
+          {
+            model_name: "gpt-5.6-sol",
+            litellm_params: { model: "chatgpt/gpt-5.6-sol" },
+            model_info: {
+              mode: "responses",
+              litellm_provider: "chatgpt",
+              supported_openai_params: ["reasoning_effort"],
+              supports_reasoning: null,
+              supports_minimal_reasoning_effort: false,
+              supports_xhigh_reasoning_effort: true,
+              supports_max_reasoning_effort: true,
+            },
+          },
+        ],
+      }),
+    );
+
+    const result = await discoverModels("https://litellm.example.com", "sk-test", { modelsDev: false });
+    const model = { ...result.models[0]!, provider: "litellm", baseUrl: "https://proxy.example.com" };
+
+    expect(getSupportedThinkingLevels(model)).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
+  });
+
+  // Issue #167: LiteLLM reads a declared level list whole, ahead of null flags.
+  it("reads a declared reasoning_effort_levels list as the complete level set", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(200, {
+        data: [
+          {
+            model_name: "zai-org/GLM-5.3",
+            litellm_params: { model: "hosted_vllm/zai-org/GLM-5.3", allowed_openai_params: ["reasoning_effort"] },
+            model_info: {
+              mode: "chat",
+              supports_reasoning: true,
+              reasoning_effort_levels: ["none", "low", "high", "max"],
+              supports_none_reasoning_effort: null,
+              supports_minimal_reasoning_effort: null,
+              supports_low_reasoning_effort: null,
+              supports_xhigh_reasoning_effort: null,
+              supports_max_reasoning_effort: null,
+            },
+          },
+        ],
+      }),
+    );
+
+    const result = await discoverModels("https://litellm.example.com", "sk-test", { modelsDev: false });
+    const model = { ...result.models[0]!, provider: "litellm", baseUrl: "https://proxy.example.com" };
+
+    expect(getSupportedThinkingLevels(model)).toEqual(["off", "low", "high", "max"]);
+    expect(model.thinkingLevelMap).toMatchObject({ off: "none", max: "max" });
   });
 
   it("merges singleton router effort flags into supported Responses levels", async () => {
@@ -2561,6 +2659,41 @@ describe("discoverModels via /model/info", () => {
     });
   });
 
+  // models.dev serves ChatGPT routes from OpenAI's key, but a field it omits must
+  // still come from the subscription's Codex catalog, not OpenAI API pricing.
+  it("keeps Codex catalog pricing for a partial models.dev ChatGPT record", async () => {
+    vi.resetModules();
+    const { discoverModels: isolatedDiscoverModels } = await import("../src/discover.js");
+    mockEndpoints({
+      "/model/info": () =>
+        jsonResponse(200, {
+          data: [
+            {
+              model_name: "gpt-5.6-sol",
+              litellm_params: { model: "chatgpt/gpt-5.6-sol" },
+              model_info: {
+                mode: "responses",
+                litellm_provider: "chatgpt",
+                supported_openai_params: ["reasoning_effort"],
+              },
+            },
+          ],
+        }),
+      "models.dev/api.json": () =>
+        jsonResponse(200, {
+          openai: {
+            models: { "gpt-5.6-sol": { reasoning_options: [{ type: "effort", values: ["none", "low", "high"] }] } },
+          },
+        }),
+    });
+
+    const result = await isolatedDiscoverModels("https://litellm.example.com", "sk-test", {
+      modelsDevCachePath: join(await mkdtemp(join(agentDir, "public-efforts-")), "models-dev.json"),
+    });
+
+    expect(result.models[0]?.cost).toMatchObject({ input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 });
+  });
+
   it.each(["azure", "azure_ai"])(
     "uses custom %s authority for public reasoning efforts over a generic adapter",
     async (customProvider) => {
@@ -3348,7 +3481,9 @@ describe("discoverModels via /model/info", () => {
     expect(writes.join("\n")).toContain("internal/mixed-tool-route");
   });
 
-  it("denies Chat reasoning levels without an accepted carrier", async () => {
+  // Issue #184: LiteLLM omits supported_openai_params for a deployment its model map
+  // does not describe, so an explicit supports_reasoning is the operator's opt-in.
+  it("keeps Pi's standard levels for an off-map deployment that opts into reasoning", async () => {
     mockEndpoints({
       "/model/info": () =>
         jsonResponse(200, {
@@ -3357,6 +3492,32 @@ describe("discoverModels via /model/info", () => {
               model_name: "opaque-chat-reasoner",
               litellm_params: { model: "internal/reasoner" },
               model_info: { id: "one", mode: "chat", supports_reasoning: true },
+            },
+          ],
+        }),
+    });
+
+    const result = await discoverModels("https://litellm.example.com", "sk-test", {});
+    const model = { ...result.models[0]!, provider: "litellm", baseUrl: "https://proxy.example.com" };
+
+    expect(model.compat).toMatchObject({ supportsReasoningEffort: true });
+    expect(getSupportedThinkingLevels(model)).toEqual(["off", "minimal", "low", "medium", "high"]);
+  });
+
+  it("denies Chat reasoning levels without an accepted carrier", async () => {
+    mockEndpoints({
+      "/model/info": () =>
+        jsonResponse(200, {
+          data: [
+            {
+              model_name: "opaque-chat-reasoner",
+              litellm_params: { model: "internal/reasoner" },
+              model_info: {
+                id: "one",
+                mode: "chat",
+                supported_openai_params: ["temperature"],
+                supports_reasoning: true,
+              },
             },
           ],
         }),
@@ -4849,6 +5010,7 @@ describe("discoverModels wildcard expansion via /v1/models", () => {
               model_info: {
                 id: "wildcard",
                 mode: "chat",
+                supported_openai_params: [],
                 supports_reasoning: true,
                 supports_vision: false,
                 max_input_tokens: 200_000,
@@ -6107,6 +6269,7 @@ describe("native Messages discovery", () => {
                 id: "uuid-claude",
                 mode: "chat",
                 litellm_provider: "anthropic",
+                supported_openai_params: [],
                 supports_reasoning: true,
                 supports_high_reasoning_effort: true,
               },

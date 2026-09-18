@@ -2,7 +2,32 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { intersectThinkingLevelMaps, THINKING_LEVEL_DEFINITIONS } from "./thinking-levels.js";
 import type { DiscoveredModel, ModelInfoEntry } from "./types.js";
 
-export const DEFAULT_CONTEXT_WINDOW = 128_000;
+const BUILTIN_CONTEXT_WINDOW = 128_000;
+
+/**
+ * Context window used when neither /model/info nor the catalog reports one.
+ * LITELLM_DEFAULT_CONTEXT_WINDOW raises it for proxies whose model map cannot
+ * populate `max_input_tokens`; an unset or unusable value keeps the 128K default.
+ */
+export function defaultContextWindow(): number {
+  // Number, not parseInt: parseInt takes a numeric prefix, so `1.5` would become a
+  // 1-token window and `922000junk` would pass as a limit instead of being rejected.
+  const parsed = Number(process.env.LITELLM_DEFAULT_CONTEXT_WINDOW ?? "");
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : BUILTIN_CONTEXT_WINDOW;
+}
+
+/**
+ * Whether a stored window is one this extension assumed rather than read. A model cached
+ * under the built-in default must still read as evidence-free once an operator configures
+ * LITELLM_DEFAULT_CONTEXT_WINDOW, or the setting would never reach cached entries.
+ * ponytail: a window stored under a setting that was later lowered is indistinguishable
+ * from measured evidence and stays until the next online discovery; persist a fallback
+ * marker on the model if that ever matters.
+ */
+export function isFallbackContextWindow(contextWindow: number): boolean {
+  return contextWindow === BUILTIN_CONTEXT_WINDOW || contextWindow === defaultContextWindow();
+}
+
 export const DEFAULT_MAX_TOKENS = 16_384;
 
 export type SemanticFamily = "claude" | "deepseek" | "gemini" | "kimi" | "openai";
@@ -181,6 +206,17 @@ function normalizeEffort(level: string): (typeof EXTENDED_LEVELS)[number] | unde
   return EXTENDED_LEVELS.find((candidate) => candidate === normalized);
 }
 
+// LiteLLM reads a declared `reasoning_effort_levels` list whole, ahead of the
+// per-level flags, because flags cannot state a set such as low/high/max: medium
+// has no opt-out. A declared list therefore answers every level for its deployment.
+function reportedLevel(entry: ModelInfoEntry, level: (typeof EXTENDED_LEVELS)[number]): boolean | undefined {
+  const declared: unknown = entry.model_info?.reasoning_effort_levels;
+  if (Array.isArray(declared)) {
+    return declared.some((effort) => typeof effort === "string" && normalizeEffort(effort) === level);
+  }
+  return wireBoolean(entry.model_info?.[LITELLM_LEVEL_FLAGS[level]]);
+}
+
 // A public effort list is complete: listed standard levels are enabled and omitted
 // ones are denied. Without a public list, standard levels stay absent so Pi keeps
 // its defaults. LiteLLM flags may add or remove levels, while xhigh/max always
@@ -200,23 +236,25 @@ function reasoningLevelMap(
       map[level] = publicSets.every((set) => set.has(level)) ? (level === "off" ? "none" : level) : null;
     }
   }
-  // A catalog level map is direct evidence even when its selectable projection
-  // is empty. Preserve its denials independently from public effort lists, whose
-  // unrecognized values intentionally have no opinion.
-  for (const catalogMap of catalogMaps) Object.assign(map, deniedLevels(catalogMap));
+  // A catalog level map is not a complete list: a null denies, a value supplies the
+  // wire spelling, and an omitted standard level keeps Pi's default. Flattening it
+  // into a list denied every standard level a map left implicit, such as Codex
+  // `gpt-5.6-sol`, which only states `xhigh`, `max`, and `minimal`.
+  for (const catalogMap of catalogMaps) {
+    for (const [level, value] of Object.entries(catalogMap ?? {}) as [keyof typeof map, string | null][]) {
+      if (value === null || (value !== undefined && map[level] !== null)) map[level] = value;
+    }
+  }
 
-  for (const [level, flag] of Object.entries(LITELLM_LEVEL_FLAGS) as Array<
-    [keyof typeof LITELLM_LEVEL_FLAGS, (typeof LITELLM_LEVEL_FLAGS)[keyof typeof LITELLM_LEVEL_FLAGS]]
-  >) {
-    const reported = entries.map((entry) => wireBoolean(entry.model_info?.[flag]));
+  for (const level of EXTENDED_LEVELS) {
+    const reported = entries.map((entry) => reportedLevel(entry, level));
     if (reported.some((value) => value === false)) map[level] = null;
     else if (reported.length > 0 && reported.every((value) => value === true)) {
       map[level] = level === "off" ? "none" : level;
     }
   }
   for (const level of ["xhigh", "max"] as const) {
-    const flag = LITELLM_LEVEL_FLAGS[level];
-    if (!entries.every((entry) => wireBoolean(entry.model_info?.[flag]) === true)) map[level] = null;
+    if (!entries.every((entry) => reportedLevel(entry, level) === true)) map[level] = null;
   }
   return map;
 }
@@ -239,6 +277,15 @@ function acceptedParams(entry: ModelInfoEntry): Set<string> {
   const params = normalizeParams(entry.model_info?.supported_openai_params);
   for (const param of normalizeParams(entry.litellm_params?.allowed_openai_params)) params.add(param);
   return params;
+}
+
+// LiteLLM omits supported_openai_params (or returns null) for a deployment its
+// model map does not describe, so that absence says nothing about the carrier. An
+// explicit `supports_reasoning: true` is the operator's opt-in there, as in
+// LiteLLM's own effort resolution. Present but malformed data is not an absence.
+function optsIntoEffortCarrier(entry: ModelInfoEntry): boolean {
+  const supported: unknown = entry.model_info?.supported_openai_params;
+  return (supported === undefined || supported === null) && wireBoolean(entry.model_info?.supports_reasoning) === true;
 }
 
 function intersectParams(entries: readonly ModelInfoEntry[]): string[] {
@@ -779,7 +826,7 @@ export function reduceModelGroup(
     (entry) => wireBoolean(entry.model_info?.supports_reasoning) === false,
   );
   const vision = visionEvidence.every((value) => value ?? false);
-  const contextWindow = min(contextWindowEvidence.map((value) => value ?? DEFAULT_CONTEXT_WINDOW));
+  const contextWindow = min(contextWindowEvidence.map((value) => value ?? defaultContextWindow()));
   const maxTokens = min(maxTokensEvidence.map((value) => value ?? DEFAULT_MAX_TOKENS));
 
   const costValues = COST_FIELDS.map((field) =>
@@ -830,16 +877,17 @@ export function reduceModelGroup(
     if (tiers) cost.tiers = tiers;
   }
   const acceptedOpenAIParams = intersectParams(deployments);
-  const acceptsResponsesReasoningControl = acceptedOpenAIParams.includes("reasoning_effort");
-  const publicEfforts = catalogAuthority.map(
-    (catalog) =>
-      catalog?.effortLevels ??
-      (catalog?.thinkingLevelMap
-        ? Object.entries(catalog.thinkingLevelMap)
-            .filter(([, value]) => value !== null)
-            .map(([level]) => level)
-        : undefined),
+  // Kimi and DeepSeek generations name their own carriers, so an operator opt-in
+  // cannot substitute for the parameter evidence their contracts require.
+  const namedCarrierFamily = catalogs.some((catalog) =>
+    ["kimi", "deepseek", "conflicting"].includes(catalog?.semanticFamily ?? ""),
   );
+  const acceptsResponsesReasoningControl =
+    acceptedOpenAIParams.includes("reasoning_effort") ||
+    (!namedCarrierFamily &&
+      deployments.length > 0 &&
+      deployments.every((entry) => acceptedParams(entry).has("reasoning_effort") || optsIntoEffortCarrier(entry)));
+  const publicEfforts = catalogAuthority.map((catalog) => catalog?.effortLevels);
   const evidenceLevelMap = reasoningLevelMap(deployments, publicEfforts, [
     intersectThinkingLevelMaps(catalogAuthority.map((catalog) => catalog?.thinkingLevelMap)),
   ]);
@@ -848,10 +896,8 @@ export function reduceModelGroup(
     thinkingLevelMap = intersectThinkingLevelMaps(catalogs.map((catalog) => catalog?.messagesThinkingLevelMap));
     // Native serializer restrictions apply even when catalog pricing is withheld.
     // Router flags can also deny Pi's implicit default levels, never add a level.
-    for (const [level, flag] of Object.entries(LITELLM_LEVEL_FLAGS) as Array<
-      [keyof typeof LITELLM_LEVEL_FLAGS, (typeof LITELLM_LEVEL_FLAGS)[keyof typeof LITELLM_LEVEL_FLAGS]]
-    >) {
-      const reported = deployments.map((entry) => wireBoolean(entry.model_info?.[flag]));
+    for (const level of EXTENDED_LEVELS) {
+      const reported = deployments.map((entry) => reportedLevel(entry, level));
       if (
         reported.some((value) => value === false) ||
         ((level === "xhigh" || level === "max") &&
@@ -886,9 +932,7 @@ export function reduceModelGroup(
   const semanticMap = semanticReasoningPolicy.thinkingLevelMap;
   const hasEvidenceLevels = Object.values(evidenceLevelMap ?? {}).some((level) => level !== null);
   const semanticBinary = semanticReasoningPolicy.compat?.supportsReasoningEffort === false && !hasEvidenceLevels;
-  const explicitOffDenial = deployments.some(
-    (entry) => wireBoolean(entry.model_info?.supports_none_reasoning_effort) === false,
-  );
+  const explicitOffDenial = deployments.some((entry) => reportedLevel(entry, "off") === false);
   const reasoningPolicy = semanticMap
     ? {
         ...semanticReasoningPolicy,
@@ -933,11 +977,6 @@ export function catalogResolution(provider: string, model: Model<Api>): CatalogR
     provider,
     catalogModelId: model.id,
     reasoning: model.reasoning,
-    effortLevels: model.thinkingLevelMap
-      ? Object.entries(model.thinkingLevelMap)
-          .filter(([, value]) => value !== null)
-          .map(([level]) => level)
-      : undefined,
     thinkingLevelMap: model.thinkingLevelMap,
     vision: model.input.includes("image"),
     contextWindow: model.contextWindow,

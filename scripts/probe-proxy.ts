@@ -221,7 +221,16 @@ function allowedReasoning(row: BackendIdentityRow): boolean {
   const allowed = Array.isArray((row.litellm_params as JsonObject | undefined)?.allowed_openai_params)
     ? ((row.litellm_params as JsonObject).allowed_openai_params as unknown[])
     : [];
-  return [...supported, ...allowed].includes("reasoning_effort");
+  if ([...supported, ...allowed].includes("reasoning_effort")) return true;
+  // Discovery's off-map opt-in: LiteLLM omits the list for a deployment outside its model
+  // map, and Kimi/DeepSeek generation contracts name their own carriers.
+  const family = resolveBackendIdentity(row)?.family;
+  return (
+    (info?.supported_openai_params === undefined || info?.supported_openai_params === null) &&
+    info?.supports_reasoning === true &&
+    family !== "kimi" &&
+    family !== "deepseek"
+  );
 }
 
 export function protocolPrediction(row: BackendIdentityRow): string {
@@ -241,8 +250,15 @@ export function protocolPrediction(row: BackendIdentityRow): string {
 export function reasoningPrediction(
   row: BackendIdentityRow,
   publicEfforts: readonly string[] | undefined,
+  catalogMap?: Record<string, unknown>,
 ): Partial<Record<ReasoningLevel, boolean>> {
   if (!allowedReasoning(row)) return Object.fromEntries(LEVELS.map((level) => [level, false]));
+  const declared = (row.model_info as JsonObject | undefined)?.reasoning_effort_levels;
+  if (Array.isArray(declared)) {
+    // Discovery reads a declared list whole, ahead of public effort lists and flags.
+    const levels = new Set(declared.map((level) => (level === "none" ? "off" : level)));
+    return Object.fromEntries(LEVELS.map((level) => [level, levels.has(level)]));
+  }
   const normalizedPublicEfforts = (publicEfforts ?? [])
     .map((level) => (level === "none" ? "off" : level))
     .filter((level): level is ReasoningLevel => (LEVELS as readonly string[]).includes(level));
@@ -255,6 +271,13 @@ export function reasoningPrediction(
       normalizedPublicEfforts.length > 0 ? publicSet.has(level) : true,
     ]),
   );
+  // A catalog map is tristate, as in discovery: a null denies, a value keeps a level
+  // the public list did not deny, and an omitted level keeps the default.
+  for (const level of LEVELS) {
+    const value = catalogMap?.[level];
+    if (value === null) predictions[level] = false;
+    else if (value !== undefined && predictions[level] !== false) predictions[level] = true;
+  }
   for (const [flag, value] of Object.entries(reasoningFlags(row))) {
     const effort = flag.slice("supports_".length, -"_reasoning_effort".length);
     const level = effort === "none" ? "off" : (effort as ReasoningLevel);
@@ -332,7 +355,7 @@ export async function probeDiscovery(options: ProbeOptions): Promise<ProbeReport
         [...flagNames].map((flag) => [flag, group.every((row) => reasoningFlags(row)[flag] === true)]),
       );
       const reasoningPredictions = group.map((row, index) =>
-        reasoningPrediction(row, publicRecords[index]?.effortLevels),
+        reasoningPrediction(row, publicRecords[index]?.effortLevels, publicRecords[index]?.thinkingLevelMap),
       );
       return {
         id: model.id,

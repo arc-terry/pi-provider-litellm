@@ -127,6 +127,52 @@ describe("predictions", () => {
     });
   });
 
+  it("reads a declared reasoning_effort_levels list whole, as discovery does", () => {
+    expect(
+      reasoningPrediction(
+        {
+          model_name: "route-glm",
+          litellm_params: { model: "hosted_vllm/glm-5.3", allowed_openai_params: ["reasoning_effort"] } as never,
+          model_info: {
+            reasoning_effort_levels: ["none", "low", "high", "max"],
+            supports_minimal_reasoning_effort: true,
+          } as never,
+        },
+        ["low", "medium", "high"],
+      ),
+    ).toEqual({ off: true, minimal: false, low: true, medium: false, high: true, xhigh: false, max: true });
+  });
+
+  it.each([
+    ["an off-map deployment", "internal/reasoner", undefined, true],
+    ["a deployment LiteLLM describes without the carrier", "internal/reasoner", [], false],
+    ["an off-map Kimi deployment", "moonshot/kimi-k3", undefined, false],
+  ])("predicts the reasoning opt-in for %s", (_label, model, params, expected) => {
+    expect(
+      reasoningPrediction(
+        {
+          model_name: "route",
+          litellm_params: { model },
+          model_info: { supports_reasoning: true, ...(params ? { supported_openai_params: params } : {}) } as never,
+        },
+        undefined,
+      ),
+    ).toMatchObject({ off: expected, low: expected, high: expected });
+  });
+
+  it("applies a catalog level map as tristate evidence", () => {
+    expect(
+      reasoningPrediction(
+        {
+          model_name: "route-gpt",
+          litellm_params: { model: "openai/route-gpt", allowed_openai_params: ["reasoning_effort"] } as never,
+        },
+        undefined,
+        { off: null, minimal: null, xhigh: "xhigh" },
+      ),
+    ).toEqual({ off: false, minimal: false, low: true, medium: true, high: true, xhigh: false, max: false });
+  });
+
   it("treats omitted standard levels as unavailable when a public effort list exists", () => {
     expect(
       reasoningPrediction(
