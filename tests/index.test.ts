@@ -213,6 +213,34 @@ describe("extension startup", () => {
     expect(pi.commands.has("litellm-refresh")).toBe(false);
   });
 
+  it("warns once per route when a LiteLLM fallback serves the request", async () => {
+    const extension = await loadExtension(await makeAgentDir());
+    const pi = createPi();
+    await extension(pi);
+    const notify = vi.fn();
+    const respond = (provider: string, id: string, attempted?: string): void => {
+      const headers = attempted === undefined ? {} : { "x-litellm-attempted-fallbacks": attempted };
+      for (const handler of pi.handlers.get("after_provider_response") ?? []) {
+        handler(
+          { type: "after_provider_response", status: 200, headers },
+          { model: { provider, id }, hasUI: true, ui: { notify } },
+        );
+      }
+    };
+
+    respond("openai", "high", "1");
+    respond("litellm", "high");
+    respond("litellm", "high", "0");
+    respond("litellm", "high", "1");
+    respond("litellm", "high", "2");
+    respond("litellm", "low", "1");
+
+    expect(notify.mock.calls).toEqual([
+      [expect.stringContaining('LiteLLM (litellm): a fallback served "high"'), "warning"],
+      [expect.stringContaining('LiteLLM (litellm): a fallback served "low"'), "warning"],
+    ]);
+  });
+
   it("keeps one provider registration across Pi-managed refresh", async () => {
     process.env.LITELLM_BASE_URL = "https://proxy.example.com";
     process.env.LITELLM_API_KEY = "sk-test";

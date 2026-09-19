@@ -2026,6 +2026,24 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     );
   });
 
+  // Router fallbacks are invisible to discovery, so protocol and model policy were chosen for the
+  // requested route even when another group answered. Name the route only; header text is proxy-supplied.
+  const warnedFallbackRoutes = new Set<string>();
+  pi.on("after_provider_response", (event, ctx) => {
+    const model = ctx.model;
+    if (!model?.provider || !providerNames.has(model.provider)) return;
+    if (!(Number(event.headers?.["x-litellm-attempted-fallbacks"]) > 0)) return;
+    const key = `${model.provider}\0${model.id}`;
+    if (warnedFallbackRoutes.has(key)) return;
+    warnedFallbackRoutes.add(key);
+    const message =
+      `LiteLLM (${model.provider}): a fallback served "${model.id}", but protocol and model handling were chosen ` +
+      `for "${model.id}"'s own deployments. If its fallbacks cross model families, pin the protocol with ` +
+      "`model_info.supported_endpoints`.";
+    if (ctx.hasUI) ctx.ui.notify(message, "warning");
+    else process.stderr.write(`${message}\n`);
+  });
+
   // Skills enrichment is best-effort: an expired credential or an unreachable proxy must not
   // report an extension error on every turn. The failing model request states the real problem.
   pi.on("before_agent_start", async (event, ctx) => {
