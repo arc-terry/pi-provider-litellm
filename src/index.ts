@@ -1896,7 +1896,13 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   // network phase, so the provider would stay empty until the user opens /model. Discover here
   // instead, the way 1.x did, and hand the catalog over as the provider's baseline models.
   async function seedModels(definition: ProviderDefinition): Promise<Model<LiteLLMApi>[]> {
-    if (discoveryDisabledReason() || isHostOffline()) return [];
+    const disabledReason = discoveryDisabledReason() ?? (isHostOffline() ? "PI_OFFLINE" : null);
+    if (disabledReason) {
+      if (isVerboseDiscovery()) {
+        process.stderr.write(`LiteLLM (${definition.name}): startup discovery skipped (${disabledReason}).\n`);
+      }
+      return [];
+    }
     try {
       const stored = readStoredCredential(definition.name, join(getAgentDir(), "auth.json"));
       // executeHelpers:false — activation must never run the user's key helper as a side effect,
