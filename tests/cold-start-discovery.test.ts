@@ -81,6 +81,7 @@ describe("cold start discovery (issue #137)", () => {
     process.env.LITELLM_BASE_URL = "https://proxy.example.com";
     process.env.LITELLM_API_KEY = "env-key";
     process.env.PI_OFFLINE = "1";
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
       throw new Error("network must not be used while offline");
     });
@@ -89,6 +90,29 @@ describe("cold start discovery (issue #137)", () => {
 
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(runtime.getModels("litellm")).toEqual([]);
+    expect(stderr).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["PI_OFFLINE", "1", "PI_OFFLINE"],
+    ["PI_OFFLINE", "0", "PI_OFFLINE"],
+    ["PI_OFFLINE", "", "PI_OFFLINE"],
+    ["LITELLM_OFFLINE", "1", "LITELLM_OFFLINE=1"],
+    ["LITELLM_DISCOVERY_TIMEOUT_MS", "0", "LITELLM_DISCOVERY_TIMEOUT_MS=0"],
+  ])("reports the %s=%j startup skip when verbose", async (variable, value, reason) => {
+    const agentDir = await mkdtemp(join(tmpdir(), "pi-litellm-cold-verbose-offline-"));
+    process.env.LITELLM_BASE_URL = "https://proxy.example.com";
+    process.env.LITELLM_API_KEY = "env-key";
+    process.env.LITELLM_VERBOSE_DISCOVERY = "1";
+    process.env[variable] = value;
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network must not be used"));
+
+    const runtime = await startup(agentDir);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(runtime.getModels("litellm")).toEqual([]);
+    expect(stderr).toHaveBeenCalledExactlyOnceWith(`LiteLLM (litellm): startup discovery skipped (${reason}).\n`);
   });
 
   it("stays offline when LITELLM_OFFLINE is set", async () => {

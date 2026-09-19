@@ -213,8 +213,13 @@ describe("extension startup", () => {
     expect(pi.commands.has("litellm-refresh")).toBe(false);
   });
 
-  it("warns once per route when a LiteLLM fallback serves the request", async () => {
-    const extension = await loadExtension(await makeAgentDir());
+  it("warns once per provider and route when a LiteLLM fallback serves the request", async () => {
+    const agentDir = await makeAgentDir();
+    await writeFile(
+      join(agentDir, "settings.json"),
+      JSON.stringify({ litellm: { providers: { "litellm-alias": {} } } }),
+    );
+    const extension = await loadExtension(agentDir);
     const pi = createPi();
     await extension(pi);
     const notify = vi.fn();
@@ -229,16 +234,71 @@ describe("extension startup", () => {
     };
 
     respond("openai", "high", "1");
+    respond("litellm-unregistered", "high", "1");
     respond("litellm", "high");
     respond("litellm", "high", "0");
+    expect(notify).not.toHaveBeenCalled();
     respond("litellm", "high", "1");
     respond("litellm", "high", "2");
     respond("litellm", "low", "1");
+    respond("litellm-alias", "high", "1");
+    respond("litellm-alias", "high", "2");
 
     expect(notify.mock.calls).toEqual([
       [expect.stringContaining('LiteLLM (litellm): a fallback served "high"'), "warning"],
       [expect.stringContaining('LiteLLM (litellm): a fallback served "low"'), "warning"],
+      [expect.stringContaining('LiteLLM (litellm-alias): a fallback served "high"'), "warning"],
     ]);
+  });
+
+  it.each([
+    [199, "1"],
+    [300, "1"],
+    [503, "1"],
+    [200, ""],
+    [200, "-1"],
+    [200, "0.5"],
+    [200, "Infinity"],
+    [200, "not-a-count"],
+  ])("ignores a fallback header on status %s with count %s", async (status, attempted) => {
+    const extension = await loadExtension(await makeAgentDir());
+    const pi = createPi();
+    await extension(pi);
+    const notify = vi.fn();
+    for (const handler of pi.handlers.get("after_provider_response") ?? []) {
+      handler(
+        { type: "after_provider_response", status, headers: { "x-litellm-attempted-fallbacks": attempted } },
+        { model: { provider: "litellm", id: "high" }, hasUI: true, ui: { notify } },
+      );
+    }
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("writes a fallback warning safely to stderr without a UI", async () => {
+    const extension = await loadExtension(await makeAgentDir());
+    const pi = createPi();
+    await extension(pi);
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    for (const handler of pi.handlers.get("after_provider_response") ?? []) {
+      handler(
+        {
+          type: "after_provider_response",
+          status: 200,
+          headers: {
+            "x-litellm-attempted-fallbacks": "1",
+            "x-litellm-model-name": "private-backend",
+            "x-litellm-model-api-base": "https://private-backend.example.com",
+          },
+        },
+        { model: { provider: "litellm", id: 'high"\n\u001b[31m' }, hasUI: false },
+      );
+    }
+    expect(stderr).toHaveBeenCalledTimes(1);
+    const output = String(stderr.mock.calls[0]?.[0]);
+    expect(output).toContain('a fallback served "high\\"\\n\\u001b[31m"');
+    expect(output.trimEnd()).not.toContain("\n");
+    expect(output).not.toContain("\u001b");
+    expect(output).not.toContain("private-backend");
   });
 
   it("keeps one provider registration across Pi-managed refresh", async () => {

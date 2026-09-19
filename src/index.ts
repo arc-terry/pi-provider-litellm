@@ -1896,7 +1896,13 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   // network phase, so the provider would stay empty until the user opens /model. Discover here
   // instead, the way 1.x did, and hand the catalog over as the provider's baseline models.
   async function seedModels(definition: ProviderDefinition): Promise<Model<LiteLLMApi>[]> {
-    if (discoveryDisabledReason() || isHostOffline()) return [];
+    const disabledReason = discoveryDisabledReason() ?? (isHostOffline() ? "PI_OFFLINE" : null);
+    if (disabledReason) {
+      if (isVerboseDiscovery()) {
+        process.stderr.write(`LiteLLM (${definition.name}): startup discovery skipped (${disabledReason}).\n`);
+      }
+      return [];
+    }
     try {
       const stored = readStoredCredential(definition.name, join(getAgentDir(), "auth.json"));
       // executeHelpers:false — activation must never run the user's key helper as a side effect,
@@ -2032,13 +2038,16 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   pi.on("after_provider_response", (event, ctx) => {
     const model = ctx.model;
     if (!model?.provider || !providerNames.has(model.provider)) return;
-    if (!(Number(event.headers?.["x-litellm-attempted-fallbacks"]) > 0)) return;
+    if (event.status < 200 || event.status >= 300) return;
+    const attemptedFallbacks = Number(event.headers["x-litellm-attempted-fallbacks"]);
+    if (!Number.isSafeInteger(attemptedFallbacks) || attemptedFallbacks <= 0) return;
     const key = `${model.provider}\0${model.id}`;
     if (warnedFallbackRoutes.has(key)) return;
     warnedFallbackRoutes.add(key);
+    const route = JSON.stringify(model.id);
     const message =
-      `LiteLLM (${model.provider}): a fallback served "${model.id}", but protocol and model handling were chosen ` +
-      `for "${model.id}"'s own deployments. If its fallbacks cross model families, pin the protocol with ` +
+      `LiteLLM (${model.provider}): a fallback served ${route}, but protocol and model handling were chosen ` +
+      `for ${route}'s own deployments. If its fallbacks cross model families, pin the protocol with ` +
       "`model_info.supported_endpoints`.";
     if (ctx.hasUI) ctx.ui.notify(message, "warning");
     else process.stderr.write(`${message}\n`);
