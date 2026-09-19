@@ -245,9 +245,9 @@ describe("extension startup", () => {
     respond("litellm-alias", "high", "2");
 
     expect(notify.mock.calls).toEqual([
-      [expect.stringContaining('LiteLLM (litellm): a fallback served "high"'), "warning"],
-      [expect.stringContaining('LiteLLM (litellm): a fallback served "low"'), "warning"],
-      [expect.stringContaining('LiteLLM (litellm-alias): a fallback served "high"'), "warning"],
+      [expect.stringContaining('LiteLLM ("litellm"): a fallback served "high"'), "warning"],
+      [expect.stringContaining('LiteLLM ("litellm"): a fallback served "low"'), "warning"],
+      [expect.stringContaining('LiteLLM ("litellm-alias"): a fallback served "high"'), "warning"],
     ]);
   });
 
@@ -274,8 +274,11 @@ describe("extension startup", () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
-  it("writes a fallback warning safely to stderr without a UI", async () => {
-    const extension = await loadExtension(await makeAgentDir());
+  it("escapes provider and route names in a headless fallback warning", async () => {
+    const provider = 'alias"\n\u001b[31m';
+    const agentDir = await makeAgentDir();
+    await writeFile(join(agentDir, "settings.json"), JSON.stringify({ litellm: { providers: { [provider]: {} } } }));
+    const extension = await loadExtension(agentDir);
     const pi = createPi();
     await extension(pi);
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
@@ -290,7 +293,7 @@ describe("extension startup", () => {
             "x-litellm-model-api-base": "https://private-backend.example.com",
           },
         },
-        { model: { provider: "litellm", id: 'high"\n\u001b[31m' }, hasUI: false },
+        { model: { provider, id: 'high"\n\u001b[31m' }, hasUI: false },
       );
     }
     expect(stderr).toHaveBeenCalledTimes(1);
@@ -298,6 +301,7 @@ describe("extension startup", () => {
     expect(output).toContain('a fallback served "high\\"\\n\\u001b[31m"');
     expect(output.trimEnd()).not.toContain("\n");
     expect(output).not.toContain("\u001b");
+    expect(output).toContain('LiteLLM ("alias\\"\\n\\u001b[31m"):');
     expect(output).not.toContain("private-backend");
   });
 
