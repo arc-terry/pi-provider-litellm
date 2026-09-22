@@ -40,6 +40,7 @@ const DEFAULT_TIMEOUT_MS = 5000;
 const HEALTH_DETAIL_CONCURRENCY = 8;
 const reportedConflictingFamilyRoutes = new Set<string>();
 const reportedWithheldRepairRoutes = new Set<string>();
+const reportedDefaultedContextRoutes = new Set<string>();
 interface HealthDeployment {
   entry: ModelInfoEntry;
   denyLevels: boolean;
@@ -597,6 +598,7 @@ function mapFromModelInfoGroup(
     ambiguousRoutes?: string[];
     conflictingFamilyRoutes?: string[];
     withheldRepairRoutes?: string[];
+    defaultedContextRoutes?: Set<string>;
     denyLevels?: boolean;
     allowMessages?: boolean;
   } = {},
@@ -618,6 +620,7 @@ function mapFromModelInfoGroup(
     };
   });
   if (!reduced) return undefined;
+  if (reduced.contextWindowDefaulted) options.defaultedContextRoutes?.add(reduced.id);
   if (reduced.catalogAuthorityAmbiguous) options.ambiguousRoutes?.push(reduced.id);
   if (reduced.deploymentFamilies.includes("conflicting")) options.conflictingFamilyRoutes?.push(reduced.id);
   const protocols = entries.map((entry) => modelProtocol(reduced.id, entry));
@@ -1034,6 +1037,7 @@ export async function discoverModels(
     const incompatibleModeRoutes: string[] = [];
     const conflictingFamilyRoutes: string[] = [];
     const withheldRepairRoutes: string[] = [];
+    const defaultedContextRoutes = new Set<string>();
     const reducedGroups = [...groups.entries()].map(([route, group]) => {
       if (hasMixedIncompatibleDeploymentModes(group)) incompatibleModeRoutes.push(route);
       return {
@@ -1042,6 +1046,7 @@ export async function discoverModels(
           ambiguousRoutes,
           conflictingFamilyRoutes,
           withheldRepairRoutes,
+          defaultedContextRoutes,
         }),
         deploymentFamilies: group.map(deploymentFamily),
       };
@@ -1097,7 +1102,27 @@ export async function discoverModels(
       }
     }
     reportWithheldToolRepair(withheldRepairRoutes);
-    return { source: "model_info", models: deduplicateModels(models) };
+    models = deduplicateModels(models);
+    if (process.env.LITELLM_VERBOSE_DISCOVERY === "1") {
+      const defaultedWildcards = wildcardRoutes.filter(({ route }) => defaultedContextRoutes.has(route));
+      // Exact routes override wildcard templates; a tighter measured parent can also win.
+      const defaulted = models.filter((model) =>
+        groups.has(model.id)
+          ? defaultedContextRoutes.has(model.id)
+          : defaultedWildcards.some(
+              ({ route, model: parent }) =>
+                parent?.contextWindow === model.contextWindow && wildcardMatches(route, model.id),
+            ),
+      );
+      reportBoundedRoutes(
+        reportedDefaultedContextRoutes,
+        defaulted.map((model) => JSON.stringify(model.id)),
+        (count) =>
+          `LiteLLM discovery: ${count} route(s) default contextWindow to ${defaultContextWindow()}; ` +
+          "set model_info.max_input_tokens on every deployment in each route",
+      );
+    }
+    return { source: "model_info", models };
   }
   if (![401, 403, 404].includes(infoResult.status)) {
     throw new Error(`/model/info returned ${infoResult.status}`);

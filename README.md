@@ -176,11 +176,13 @@ Native Messages authenticates with `x-api-key`; every transport carries the `x-l
 | `PI_OFFLINE` | unset | In Pi 0.85.1, any set value (including `0` or an empty string) disables startup model discovery and `/model` network refreshes. Unset it to allow discovery; cached models can still be used offline. |
 | `LITELLM_DISCOVERY_TIMEOUT_MS` | `5000` | Background and explicit discovery fetch timeout in ms; `0` disables automatic discovery |
 | `LITELLM_CLI_JWT_EXPIRATION_HOURS` | `24` | CLI SSO token lifetime fallback for older proxies whose poll response omits `expires_in`; mirror a non-default proxy setting locally |
-| `LITELLM_VERBOSE_DISCOVERY` | unset | If `1`, enable progress messages during model and MCP discovery (login, refresh, startup), including startup skip reasons and MCP prepared/registered/dropped counts. Progress messages are off by default; MCP safety diagnostics (see below) are always reported regardless of this setting |
+| `LITELLM_VERBOSE_DISCOVERY` | unset | If `1`, enable progress messages during model and MCP discovery (login, refresh, startup), including startup skip reasons, defaulted `/model/info` context windows, and MCP prepared/registered/dropped counts. Progress messages are off by default; MCP safety diagnostics (see below) are always reported regardless of this setting |
 | `LITELLM_DEFAULT_CONTEXT_WINDOW` | `128000` | Context window assumed when neither LiteLLM's `/model/info` nor the catalog reports `max_input_tokens`. Set a positive integer for proxies whose custom aliases carry no metadata; an unset or unusable value keeps 128K |
 | `LITELLM_MODELS_DEV` | unset | If `1`, enrich discovered metadata (limits, prices, effort lists) from models.dev, cached for 28 days in `litellm-models-dev.json`. Off by default because LiteLLM's `/model/info` is authoritative; use it when LiteLLM's model map lacks a model's metadata |
 
 Only use a trusted `LITELLM_API_KEY_HELPER` or `!command`. Prefer an absolute executable path, keep secrets out of command arguments, and print only the token to stdout without logging it to stderr.
+
+With `LITELLM_VERBOSE_DISCOVERY=1`, `/model/info` discovery reports published routes whose context window uses the fallback assumption (including wildcard expansions) on one line with the selected value, a count, and a sample of escaped route names. Each route is reported once per process. Explicit or authoritative catalog limits do not trigger it, even when numerically equal to the default. Set `model_info.max_input_tokens` on every deployment in the route to provide real limits; this diagnostic does not change discovery limits or routing.
 
 `LITELLM_DISCOVERY_TIMEOUT_MS=0` disables automatic and explicit refresh model discovery. It does not replace the base URL or API key settings required to send requests when you are not using `/login litellm`.
 
