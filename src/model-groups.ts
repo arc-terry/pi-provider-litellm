@@ -77,6 +77,7 @@ export interface ReducedModelGroup {
   thinkingLevelMap?: DiscoveredModel["thinkingLevelMap"];
   vision: boolean;
   contextWindow: number;
+  contextWindowDefaulted?: boolean;
   maxTokens: number;
   cost: DiscoveredModel["cost"];
   hasCompleteCost: boolean;
@@ -826,7 +827,8 @@ export function reduceModelGroup(
     (entry) => wireBoolean(entry.model_info?.supports_reasoning) === false,
   );
   const vision = visionEvidence.every((value) => value ?? false);
-  const contextWindow = min(contextWindowEvidence.map((value) => value ?? defaultContextWindow()));
+  const fallbackContextWindow = defaultContextWindow();
+  const contextWindow = min(contextWindowEvidence.map((value) => value ?? fallbackContextWindow));
   const maxTokens = min(maxTokensEvidence.map((value) => value ?? DEFAULT_MAX_TOKENS));
 
   const costValues = COST_FIELDS.map((field) =>
@@ -955,6 +957,9 @@ export function reduceModelGroup(
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     vision,
     contextWindow,
+    ...(contextWindowEvidence.includes(undefined) && contextWindow === fallbackContextWindow
+      ? { contextWindowDefaulted: true }
+      : {}),
     maxTokens,
     cost,
     hasCompleteCost,
