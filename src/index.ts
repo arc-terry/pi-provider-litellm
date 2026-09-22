@@ -1657,7 +1657,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   const mcpPauseInMemory = new Set<string>();
   let mcpPauseSalt: Buffer | undefined;
   let mcpPausePersistent = true;
-  let mcpLoginGeneration = 0;
+  // Keyed by provider: only the default provider has /login, and its login must not cancel an
+  // alias's in-flight registration, which login does not retry.
+  const mcpLoginGenerations = new Map<string, number>();
+  const mcpLoginGeneration = (name: string) => mcpLoginGenerations.get(name) ?? 0;
 
   function getMcpPauseSalt(): Buffer {
     if (!mcpPauseSalt) {
@@ -1726,7 +1729,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   }
 
   function resumeMcpDiscovery(): void {
-    mcpLoginGeneration += 1;
+    mcpLoginGenerations.set(PROVIDER_NAME, mcpLoginGeneration(PROVIDER_NAME) + 1);
     registeredMcpIdentities.delete(PROVIDER_NAME);
     // The new login ID selects a fresh scope; other processes may still use the old scopes.
   }
@@ -1810,7 +1813,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     signal?: AbortSignal,
   ): Promise<void> {
     if (!mcpEnabled || discoveryDisabledReason() || mcpRegistrationFatal || isMcpPaused(auth, credential)) return;
-    const loginGeneration = mcpLoginGeneration;
+    const loginGeneration = mcpLoginGeneration(definition.name);
     const identity = mcpCatalogIdentity(auth, credential);
     const isDefault = definition.name === PROVIDER_NAME;
     // The default provider keeps its unprefixed tool names and diagnostics; an alias is scoped by name.
@@ -1826,7 +1829,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       if (
         mcpRegistrationFatal ||
         isMcpPaused(auth, credential) ||
-        loginGeneration !== mcpLoginGeneration ||
+        loginGeneration !== mcpLoginGeneration(definition.name) ||
         registeredMcpIdentities.get(definition.name) === identity
       )
         return;
@@ -1845,7 +1848,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
           namespace,
         );
         signal?.throwIfAborted();
-        if (loginGeneration !== mcpLoginGeneration) return;
+        if (loginGeneration !== mcpLoginGeneration(definition.name)) return;
         const registeredNames: string[] = [];
         try {
           for (const definition of definitions) {
@@ -1879,7 +1882,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
         if (definitions.length > 0 && !report.partialFailure) registeredMcpIdentities.set(definition.name, identity);
       } catch (error) {
         if (signal?.aborted) throw signal.reason;
-        if (loginGeneration !== mcpLoginGeneration) return;
+        if (loginGeneration !== mcpLoginGeneration(definition.name)) return;
         if (error instanceof McpAccessDeniedError) {
           pauseMcpDiscovery(auth, credential);
           // Aliases have no /login; their pause scope is their URL, key, and headers, so a change lifts it.
@@ -2004,21 +2007,21 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     Object.assign(provider, { headers: resolveHeaders(definition) });
     const refreshModels = provider.refreshModels!;
     provider.refreshModels = async (context) => {
-      const loginGeneration = mcpLoginGeneration;
+      const loginGeneration = mcpLoginGeneration(definition.name);
       try {
         await refreshModels(context);
       } finally {
         if (
           context.allowNetwork &&
           !discoveryDisabledReason() &&
-          loginGeneration === mcpLoginGeneration &&
+          loginGeneration === mcpLoginGeneration(definition.name) &&
           context.credential
         ) {
           // Best-effort: refreshing the cached default auth / MCP catalog must not let a bad or
           // placeholder credential override refreshModels' own try/throw outcome via `finally`.
           try {
             const auth = await authForCredential(definition, context.credential);
-            if (loginGeneration === mcpLoginGeneration) {
+            if (loginGeneration === mcpLoginGeneration(definition.name)) {
               if (definition.name === PROVIDER_NAME) defaultRuntimeAuth = auth;
               void registerMcpTools(definition, auth, context.credential, context.signal).catch(() => undefined);
             }
