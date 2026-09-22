@@ -1775,7 +1775,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   async function requireRuntimeAuth(ctx: ExtensionContext, definition = definitions[0]!): Promise<LiteLLMRuntimeAuth> {
     const auth = await getRuntimeAuth(ctx, definition);
     if (auth) return auth;
-    throw new Error(`no credentials for ${definition.name}. Run /login ${definition.name} or set env vars.`);
+    const fix = definition.name === PROVIDER_NAME ? "Run /login litellm or set env vars" : "Set its baseUrl and apiKey";
+    throw new Error(`no credentials for ${definition.name}. ${fix}.`);
   }
 
   async function resolveDefaultRuntimeAuth(ctx?: ExtensionContext): Promise<LiteLLMRuntimeAuth> {
@@ -1881,7 +1882,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
         if (loginGeneration !== mcpLoginGeneration) return;
         if (error instanceof McpAccessDeniedError) {
           pauseMcpDiscovery(auth, credential);
-          notifyMcp(`${label}: access denied; discovery paused until /login ${definition.name} succeeds.`);
+          // Aliases have no /login; their pause scope is their URL, key, and headers, so a change lifts it.
+          notifyMcp(
+            `${label}: access denied; discovery paused until ${isDefault ? "/login litellm succeeds" : "its credentials change"}.`,
+          );
           return;
         }
         notifyMcp(
