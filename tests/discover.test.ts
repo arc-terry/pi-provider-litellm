@@ -434,7 +434,11 @@ describe("enrichCachedModel reasoning policy", () => {
 });
 
 describe("context window fallback diagnostic", () => {
-  beforeEach(() => {
+  // Reported routes are remembered per process, so each case starts from a fresh module.
+  let discover: typeof discoverModels;
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ discoverModels: discover } = await import("../src/discover.js"));
     vi.stubEnv("LITELLM_VERBOSE_DISCOVERY", "1");
     vi.stubEnv("LITELLM_DEFAULT_CONTEXT_WINDOW", undefined);
   });
@@ -448,13 +452,13 @@ describe("context window fallback diagnostic", () => {
     });
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
 
-    const result = await discoverModels("https://litellm.example.com", "sk-test", { modelsDev: false });
+    const result = await discover("https://litellm.example.com", "sk-test", { modelsDev: false });
 
     expect(result.models[0]).toMatchObject({ contextWindow: 128000, maxTokens: 16384 });
     expect(stderr).toHaveBeenCalledTimes(1);
     const message = String(stderr.mock.calls[0]?.[0]);
     expect(message).toContain('"private\\"\\n\\u001b[31m"');
-    expect(message).toContain("defaulting contextWindow to 128000");
+    expect(message).toContain("1 route(s) default contextWindow to 128000");
     expect(message).toContain("model_info.max_input_tokens");
     expect(message.trimEnd()).not.toContain("\n");
     expect(message).not.toContain("\u001b");
@@ -467,7 +471,7 @@ describe("context window fallback diagnostic", () => {
     });
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
 
-    const result = await discoverModels("https://litellm.example.com", "sk-test", { modelsDev: false });
+    const result = await discover("https://litellm.example.com", "sk-test", { modelsDev: false });
 
     expect(result.models[0]?.contextWindow).toBe(128000);
     expect(stderr).not.toHaveBeenCalled();
@@ -491,7 +495,7 @@ describe("context window fallback diagnostic", () => {
     });
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
 
-    const result = await discoverModels("https://litellm.example.com", "sk-test", { modelsDev: false });
+    const result = await discover("https://litellm.example.com", "sk-test", { modelsDev: false });
 
     expect(result.models[0]?.contextWindow).toBe(128000);
     expect(stderr).not.toHaveBeenCalled();
@@ -509,13 +513,15 @@ describe("context window fallback diagnostic", () => {
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     for (const data of [rows, [...rows].reverse()]) {
       stderr.mockClear();
+      vi.resetModules();
+      ({ discoverModels: discover } = await import("../src/discover.js"));
       mockEndpoints({ "/model/info": () => jsonResponse(200, { data }) });
 
-      const result = await discoverModels("https://litellm.example.com", "sk-test", { modelsDev: false });
+      const result = await discover("https://litellm.example.com", "sk-test", { modelsDev: false });
 
       expect(result.models[0]?.contextWindow).toBe(expected);
       if (warns) {
-        expect(stderr.mock.calls).toEqual([[expect.stringContaining("defaulting contextWindow to 922000")]]);
+        expect(stderr.mock.calls).toEqual([[expect.stringContaining("default contextWindow to 922000")]]);
       } else {
         expect(stderr).not.toHaveBeenCalled();
       }
@@ -539,7 +545,7 @@ describe("context window fallback diagnostic", () => {
     });
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
 
-    const result = await discoverModels("https://litellm.example.com", "sk-test", { modelsDev: false });
+    const result = await discover("https://litellm.example.com", "sk-test", { modelsDev: false });
 
     expect(result.models.map(({ id, contextWindow }) => [id, contextWindow]).sort()).toEqual([
       ["private/child", 128000],
@@ -547,7 +553,11 @@ describe("context window fallback diagnostic", () => {
       ["private/small-child", 64000],
     ]);
     expect(stderr.mock.calls).toEqual([
-      [expect.stringContaining('"private/child" is defaulting contextWindow to 128000')],
+      [
+        expect.stringMatching(
+          /^LiteLLM discovery: 1 route\(s\) default contextWindow to 128000; .*: "private\/child"\n$/,
+        ),
+      ],
     ]);
   });
 
@@ -558,10 +568,26 @@ describe("context window fallback diagnostic", () => {
     });
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
 
-    const result = await discoverModels("https://litellm.example.com", "sk-test", { modelsDev: false });
+    const result = await discover("https://litellm.example.com", "sk-test", { modelsDev: false });
 
     expect(result.models).toEqual([]);
-    expect(stderr.mock.calls.join("\n")).not.toContain("defaulting contextWindow");
+    expect(stderr.mock.calls.join("\n")).not.toContain("default contextWindow");
+  });
+
+  it("reports many defaulted routes on one bounded line, once per process", async () => {
+    const data = Array.from({ length: 50 }, (_, index) => ({
+      model_name: `route-${index}`,
+      model_info: { mode: "chat" },
+    }));
+    mockEndpoints({ "/model/info": () => jsonResponse(200, { data }) });
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+    await discover("https://litellm.example.com", "sk-test", { modelsDev: false });
+    await discover("https://litellm.example.com", "sk-test", { modelsDev: false });
+
+    expect(stderr.mock.calls).toEqual([
+      [expect.stringMatching(/^LiteLLM discovery: 50 route\(s\) default contextWindow to 128000; .* \(\+47 more\)\n$/)],
+    ]);
   });
 });
 

@@ -182,7 +182,7 @@ Native Messages authenticates with `x-api-key`; every transport carries the `x-l
 
 Only use a trusted `LITELLM_API_KEY_HELPER` or `!command`. Prefer an absolute executable path, keep secrets out of command arguments, and print only the token to stdout without logging it to stderr.
 
-With `LITELLM_VERBOSE_DISCOVERY=1`, each `/model/info` discovery reports published routes whose context window uses the fallback assumption (including wildcard expansions), with escaped route names and the selected value. Explicit or authoritative catalog limits do not trigger it, even when numerically equal to the default. Set `model_info.max_input_tokens` on every deployment in the route to provide real limits; this diagnostic does not change discovery limits or routing.
+With `LITELLM_VERBOSE_DISCOVERY=1`, `/model/info` discovery reports published routes whose context window uses the fallback assumption (including wildcard expansions) on one line with the selected value, a count, and a sample of escaped route names. Each route is reported once per process. Explicit or authoritative catalog limits do not trigger it, even when numerically equal to the default. Set `model_info.max_input_tokens` on every deployment in the route to provide real limits; this diagnostic does not change discovery limits or routing.
 
 `LITELLM_DISCOVERY_TIMEOUT_MS=0` disables automatic and explicit refresh model discovery. It does not replace the base URL or API key settings required to send requests when you are not using `/login litellm`.
 

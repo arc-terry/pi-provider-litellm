@@ -40,6 +40,7 @@ const DEFAULT_TIMEOUT_MS = 5000;
 const HEALTH_DETAIL_CONCURRENCY = 8;
 const reportedConflictingFamilyRoutes = new Set<string>();
 const reportedWithheldRepairRoutes = new Set<string>();
+const reportedDefaultedContextRoutes = new Set<string>();
 interface HealthDeployment {
   entry: ModelInfoEntry;
   denyLevels: boolean;
@@ -1104,20 +1105,22 @@ export async function discoverModels(
     models = deduplicateModels(models);
     if (process.env.LITELLM_VERBOSE_DISCOVERY === "1") {
       const defaultedWildcards = wildcardRoutes.filter(({ route }) => defaultedContextRoutes.has(route));
-      for (const model of models) {
-        // Exact routes override wildcard templates; a tighter measured parent can also win.
-        const defaulted = groups.has(model.id)
+      // Exact routes override wildcard templates; a tighter measured parent can also win.
+      const defaulted = models.filter((model) =>
+        groups.has(model.id)
           ? defaultedContextRoutes.has(model.id)
           : defaultedWildcards.some(
               ({ route, model: parent }) =>
                 parent?.contextWindow === model.contextWindow && wildcardMatches(route, model.id),
-            );
-        if (!defaulted) continue;
-        process.stderr.write(
-          `LiteLLM discovery: ${JSON.stringify(model.id)} is defaulting contextWindow to ${model.contextWindow}. ` +
-            "Set model_info.max_input_tokens for every deployment in this route.\n",
-        );
-      }
+            ),
+      );
+      reportBoundedRoutes(
+        reportedDefaultedContextRoutes,
+        defaulted.map((model) => JSON.stringify(model.id)),
+        (count) =>
+          `LiteLLM discovery: ${count} route(s) default contextWindow to ${defaultContextWindow()}; ` +
+          "set model_info.max_input_tokens on every deployment in each route",
+      );
     }
     return { source: "model_info", models };
   }
