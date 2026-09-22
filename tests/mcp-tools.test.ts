@@ -310,6 +310,23 @@ describe("partial discovery diagnostics", () => {
 
     expect(stderr.mock.calls).toHaveLength(2);
   });
+
+  it("keeps each provider's incident suppression separate", () => {
+    const lines: string[] = [];
+    const defaultSink = (line: string) => lines.push(line);
+    const aliasSink = Object.assign((line: string) => lines.push(line), { incidentScope: "team" });
+
+    reportMcpPartialDiscovery(true, ["mcp_a_one_1"], defaultSink);
+    reportMcpPartialDiscovery(true, ["mcp_team_b_one_2"], aliasSink);
+    // Neither provider's clean pass nor differing membership re-triggers the other's incident.
+    reportMcpPartialDiscovery(false, [], aliasSink);
+    reportMcpPartialDiscovery(true, ["mcp_a_one_1"], defaultSink);
+
+    expect(lines).toEqual([
+      "LiteLLM MCP: proxy reported a partial server failure; 1 tool registered.\n",
+      'LiteLLM MCP ("team"): proxy reported a partial server failure; 1 tool registered.\n',
+    ]);
+  });
 });
 
 describe("executeMcpTool", () => {
