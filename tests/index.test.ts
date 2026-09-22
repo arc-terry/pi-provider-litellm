@@ -1124,6 +1124,41 @@ describe("extension startup", () => {
     expect(fatalLines()).toHaveLength(2);
   });
 
+  it("registers an alias provider's MCP tools when Pi refreshes that alias", async () => {
+    process.env.LITELLM_MODELS_DEV = "0";
+    const agentDir = await makeAgentDir();
+    await writeFile(
+      join(agentDir, "settings.json"),
+      JSON.stringify({ litellm: { providers: { team: { baseUrl: "https://team.example.com", apiKey: "team-key" } } } }),
+    );
+    const listed: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/model/info")) {
+        return jsonResponse(200, { data: [{ model_name: "fresh-model", model_info: { mode: "chat" } }] });
+      }
+      if (url.endsWith("/mcp-rest/tools/list")) {
+        listed.push(url);
+        return jsonResponse(200, {
+          tools: [{ name: "good", inputSchema: { type: "object", properties: {} }, server_name: "server" }],
+        });
+      }
+      throw new Error(`unexpected URL: ${url}`);
+    });
+    const pi = createPi();
+    await (await loadExtension(agentDir))(pi);
+    const alias = pi.providers.find((provider) => provider.id === "team");
+
+    await refreshProvider(alias!, {
+      allowNetwork: true,
+      credential: { type: "api_key", key: "team-key" },
+      signal: new AbortController().signal,
+    });
+
+    await vi.waitFor(() => expect(pi.tools.map((tool) => tool.name)).toContainEqual(named("mcp_team_server_good")));
+    expect(listed).toEqual(["https://team.example.com/mcp-rest/tools/list"]);
+  });
+
   it("skips re-registration for an unchanged identity after a fully successful pass", async () => {
     process.env.LITELLM_MODELS_DEV = "0";
     let listCalls = 0;

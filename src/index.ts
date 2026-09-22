@@ -2009,7 +2009,6 @@ export default async function (pi: ExtensionAPI): Promise<void> {
         await refreshModels(context);
       } finally {
         if (
-          definition.name === PROVIDER_NAME &&
           context.allowNetwork &&
           !discoveryDisabledReason() &&
           loginGeneration === mcpLoginGeneration &&
@@ -2020,7 +2019,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
           try {
             const auth = await authForCredential(definition, context.credential);
             if (loginGeneration === mcpLoginGeneration) {
-              defaultRuntimeAuth = auth;
+              if (definition.name === PROVIDER_NAME) defaultRuntimeAuth = auth;
               void registerMcpTools(definition, auth, context.credential, context.signal).catch(() => undefined);
             }
           } catch {
