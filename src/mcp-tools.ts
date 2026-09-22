@@ -27,7 +27,9 @@ const TRUNCATION_MARKER = "\n[truncated by pi-provider-litellm]";
 const DESCRIPTION_TRUNCATION_MARKER = "… [truncated]";
 const SHORT_TRUNCATION_MARKER = "…";
 
-type DiagnosticSink = (message: string) => void;
+// `incidentScope` separates the suppression state of catalogs from different providers, so one
+// provider's clean pass cannot clear, and its differing report cannot re-trigger, another's incident.
+type DiagnosticSink = ((message: string) => void) & { readonly incidentScope?: string };
 
 interface RawLiteLLMMcpTool {
   name?: unknown;
@@ -130,13 +132,16 @@ function emitSafetyDiagnostic(
     process.stderr.write(line);
   },
 ): void {
-  if (lastEmittedIncident.get(incident) === identity) return;
-  lastEmittedIncident.set(incident, identity);
-  onDiagnostic(`LiteLLM MCP: ${message}\n`);
+  const scope = onDiagnostic.incidentScope;
+  const key = scope === undefined ? incident : `${scope}\0${incident}`;
+  if (lastEmittedIncident.get(key) === identity) return;
+  lastEmittedIncident.set(key, identity);
+  onDiagnostic(`LiteLLM MCP${scope === undefined ? "" : ` (${JSON.stringify(scope)})`}: ${message}\n`);
 }
 
-function clearIncident(incident: string): void {
-  lastEmittedIncident.delete(incident);
+function clearIncident(incident: string, onDiagnostic?: DiagnosticSink): void {
+  const scope = onDiagnostic?.incidentScope;
+  lastEmittedIncident.delete(scope === undefined ? incident : `${scope}\0${incident}`);
 }
 
 function membershipIdentity(tools: readonly string[]): string {
@@ -184,8 +189,8 @@ export function reportMcpRegistrationFatal(
 
 // A successful pass clears any fatal incident left by an earlier extension instance, so the same
 // failure is reported if it later recurs.
-export function reportMcpRegistrationSuccess(): void {
-  clearIncident("registration-fatal");
+export function reportMcpRegistrationSuccess(onDiagnostic?: DiagnosticSink): void {
+  clearIncident("registration-fatal", onDiagnostic);
 }
 
 // `registered` is the generated names of the tools that survived, so a failure that changes
@@ -196,7 +201,7 @@ export function reportMcpPartialDiscovery(
   onDiagnostic?: DiagnosticSink,
 ): void {
   if (!partialFailure) {
-    clearIncident("discovery-partial-failure");
+    clearIncident("discovery-partial-failure", onDiagnostic);
     return;
   }
   emitSafetyDiagnostic(
@@ -212,7 +217,7 @@ export function reportMcpPartialDiscovery(
 // an unchanged message.
 export function reportMcpCatalogOutcome(raw: number, registered: number, onDiagnostic?: DiagnosticSink): void {
   if (registered > 0) {
-    clearIncident("empty-catalog");
+    clearIncident("empty-catalog", onDiagnostic);
     return;
   }
   emitSafetyDiagnostic(
@@ -281,7 +286,7 @@ async function readBoundedText(
   onDiagnostic?: DiagnosticSink,
 ): Promise<string> {
   if (!response.body) {
-    clearIncident(`${surface}-body-cap`);
+    clearIncident(`${surface}-body-cap`, onDiagnostic);
     return "";
   }
   const reader = response.body.getReader();
@@ -312,7 +317,7 @@ async function readBoundedText(
   }
   // A response that stayed within the cap clears the incident, so a later breach on this surface
   // is reported again instead of being suppressed as an unchanged message.
-  clearIncident(`${surface}-body-cap`);
+  clearIncident(`${surface}-body-cap`, onDiagnostic);
   return Buffer.concat(
     chunks.map((chunk) => Buffer.from(chunk)),
     size,
@@ -743,9 +748,13 @@ function toolIdentity(tool: LiteLLMMcpTool): string {
 // A conditional hash would make a survivor's name depend on which *other* tools happened to be in
 // the same catalog, so adding or removing a sibling would rename it — and because Pi cannot
 // unregister, the old name would linger and the model would see one tool twice.
-function buildPiToolName(tool: LiteLLMMcpTool): string {
-  const hash = createHash("sha256").update(toolIdentity(tool)).digest("hex").slice(0, TOOL_NAME_HASH_LENGTH);
-  const base = `mcp_${sanitizeName(tool.server_name)}_${sanitizeName(tool.name)}`;
+// An alias provider's catalog is namespaced by the provider name, in both the prefix and the hash,
+// so two providers exposing the same server never replace each other's tools.
+function buildPiToolName(tool: LiteLLMMcpTool, namespace?: string): string {
+  const identity = namespace === undefined ? toolIdentity(tool) : JSON.stringify([namespace, toolIdentity(tool)]);
+  const hash = createHash("sha256").update(identity).digest("hex").slice(0, TOOL_NAME_HASH_LENGTH);
+  const prefix = namespace === undefined ? "mcp" : `mcp_${sanitizeName(namespace)}`;
+  const base = `${prefix}_${sanitizeName(tool.server_name)}_${sanitizeName(tool.name)}`;
   return `${base.slice(0, MAX_TOOL_NAME_LENGTH - hash.length - 1)}_${hash}`;
 }
 
@@ -1135,7 +1144,10 @@ function buildParameters(tool: LiteLLMMcpTool): BuiltParameters | McpDropReason 
   return { parameters: Type.Unsafe(inputSchema), syntheticArgsEnvelope: false };
 }
 
-export function prepareTools(discovery: McpDiscovery): {
+export function prepareTools(
+  discovery: McpDiscovery,
+  namespace?: string,
+): {
   prepared: PreparedTool[];
   report: McpPreparationReport;
 } {
@@ -1160,12 +1172,12 @@ export function prepareTools(discovery: McpDiscovery): {
   for (const tool of discovery.tools) {
     const built = buildParameters(tool);
     if (typeof built === "string") {
-      recordDrop(built, buildPiToolName(tool));
+      recordDrop(built, buildPiToolName(tool, namespace));
       continue;
     }
     const identity = toolIdentity(tool);
     if (acceptedIdentities.has(identity)) {
-      recordDrop("duplicate-identity", buildPiToolName(tool));
+      recordDrop("duplicate-identity", buildPiToolName(tool, namespace));
       continue;
     }
     acceptedIdentities.add(identity);
@@ -1178,12 +1190,12 @@ export function prepareTools(discovery: McpDiscovery): {
   }
 
   const candidates = accepted.slice(0, MAX_REGISTERED_TOOLS);
-  const overflowTools = accepted.slice(MAX_REGISTERED_TOOLS).map(({ tool }) => buildPiToolName(tool));
+  const overflowTools = accepted.slice(MAX_REGISTERED_TOOLS).map(({ tool }) => buildPiToolName(tool, namespace));
   const finalNames = new Set<string>();
   const prepared: PreparedTool[] = [];
   for (const candidate of candidates) {
     // Membership-independent: the name depends only on this tool's identity.
-    const name = buildPiToolName(candidate.tool);
+    const name = buildPiToolName(candidate.tool, namespace);
     if (finalNames.has(name)) {
       recordDrop("name-collision", name);
       continue;
@@ -1251,7 +1263,7 @@ function emitPreparationDiagnostics(report: McpPreparationReport, onDiagnostic?:
   // Clear classes that did not recur, so the same incident is reported again if it comes back
   // after a clean refresh instead of being suppressed as an unchanged identity.
   for (const reason of [...Object.keys(INCIDENT_REASON_TEXT), "tool-cap"]) {
-    if (!seen.has(reason)) clearIncident(reason);
+    if (!seen.has(reason)) clearIncident(reason, onDiagnostic);
   }
 }
 
@@ -1260,6 +1272,7 @@ export async function createMcpToolDefinitions(
   onProgress?: (message: string) => void,
   signal?: AbortSignal,
   onDiagnostic?: DiagnosticSink,
+  namespace?: string,
 ): Promise<{ definitions: ToolDefinition[]; report: McpPreparationReport }> {
   const discoveryAuth = await getAuth();
   const discovery = await discoverMcpTools(
@@ -1271,7 +1284,7 @@ export async function createMcpToolDefinitions(
     discoveryAuth.allowInsecureHttp,
     onDiagnostic,
   );
-  const { prepared, report } = prepareTools(discovery);
+  const { prepared, report } = prepareTools(discovery, namespace);
   emitPreparationDiagnostics(report, onDiagnostic);
   const lostTotal = report.dropped.reduce((total, entry) => total + entry.tools.length, 0) + report.overflow;
   const lostDetail = [

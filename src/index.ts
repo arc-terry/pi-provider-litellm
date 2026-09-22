@@ -1643,8 +1643,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     };
   }
 
-  let registeredMcpIdentity: string | undefined;
-  let mcpRegistration: Promise<void> | undefined;
+  // Each provider owns its own MCP catalog, keyed by provider name.
+  const registeredMcpIdentities = new Map<string, string>();
+  let mcpSeeded = false;
+  const mcpRegistrations = new Map<string, Promise<void>>();
   // Pi's registerTool throws only from assertActive(), whose staleness flag is set with `??=` and
   // never cleared, so a refusal is fatal for this extension instance rather than a per-tool or
   // retryable condition. Once seen, stop attempting registration here; a reload creates a fresh
@@ -1725,7 +1727,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 
   function resumeMcpDiscovery(): void {
     mcpLoginGeneration += 1;
-    registeredMcpIdentity = undefined;
+    registeredMcpIdentities.delete(PROVIDER_NAME);
     // The new login ID selects a fresh scope; other processes may still use the old scopes.
   }
 
@@ -1746,17 +1748,17 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     });
   }
 
-  async function getRuntimeAuth(ctx: ExtensionContext): Promise<LiteLLMRuntimeAuth | undefined> {
-    const auth = await ctx.modelRegistry.getProviderAuth(PROVIDER_NAME);
+  async function getRuntimeAuth(
+    ctx: ExtensionContext,
+    definition = definitions[0]!,
+  ): Promise<LiteLLMRuntimeAuth | undefined> {
+    const auth = await ctx.modelRegistry.getProviderAuth(definition.name);
     if (!auth) return undefined;
-    const provider = ctx.modelRegistry.getProvider(PROVIDER_NAME);
+    const provider = ctx.modelRegistry.getProvider(definition.name);
     const apiKey = auth.auth.apiKey;
     const baseUrl = cleanConfig(auth.auth.baseUrl) ?? cleanConfig(auth.env?.[ENV_BASE_URL]) ?? provider?.baseUrl;
     if (!baseUrl || !apiKey) return undefined;
-    const runtimeRoot = requireCredentialRoot(
-      normalizeBaseUrl(baseUrl, definitions[0]?.allowInsecureHttp),
-      PROVIDER_NAME,
-    );
+    const runtimeRoot = requireCredentialRoot(normalizeBaseUrl(baseUrl, definition.allowInsecureHttp), definition.name);
     const headers = Object.fromEntries(
       Object.entries(auth.auth.headers ?? provider?.headers ?? {}).filter(
         (entry): entry is [string, string] => typeof entry[1] === "string",
@@ -1766,16 +1768,19 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       baseUrl: runtimeRoot,
       apiKey,
       headers: Object.keys(headers).length > 0 ? headers : undefined,
-      allowInsecureHttp: definitions[0]?.allowInsecureHttp,
+      allowInsecureHttp: definition.allowInsecureHttp,
     };
   }
 
+  async function requireRuntimeAuth(ctx: ExtensionContext, definition = definitions[0]!): Promise<LiteLLMRuntimeAuth> {
+    const auth = await getRuntimeAuth(ctx, definition);
+    if (auth) return auth;
+    const fix = definition.name === PROVIDER_NAME ? "Run /login litellm or set env vars" : "Set its baseUrl and apiKey";
+    throw new Error(`no credentials for ${definition.name}. ${fix}.`);
+  }
+
   async function resolveDefaultRuntimeAuth(ctx?: ExtensionContext): Promise<LiteLLMRuntimeAuth> {
-    if (ctx?.modelRegistry) {
-      const auth = await getRuntimeAuth(ctx);
-      if (auth) return auth;
-      throw new Error("no credentials for litellm. Run /login litellm or set env vars.");
-    }
+    if (ctx?.modelRegistry) return requireRuntimeAuth(ctx);
     if (!defaultRuntimeAuth) throw new Error("no credentials for litellm. Run /login litellm or set env vars.");
     return defaultRuntimeAuth;
   }
@@ -1798,31 +1803,46 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     });
   }
 
-  async function registerMcpTools(auth: McpRuntimeAuth, credential: Credential, signal?: AbortSignal): Promise<void> {
+  async function registerMcpTools(
+    definition: ProviderDefinition,
+    auth: McpRuntimeAuth,
+    credential: Credential,
+    signal?: AbortSignal,
+  ): Promise<void> {
     if (!mcpEnabled || discoveryDisabledReason() || mcpRegistrationFatal || isMcpPaused(auth, credential)) return;
     const loginGeneration = mcpLoginGeneration;
     const identity = mcpCatalogIdentity(auth, credential);
-    while (mcpRegistration) {
-      await waitForMcpRegistration(mcpRegistration, signal);
+    const isDefault = definition.name === PROVIDER_NAME;
+    // The default provider keeps its unprefixed tool names and diagnostics; an alias is scoped by name.
+    const namespace = isDefault ? undefined : definition.name;
+    const notify = isDefault
+      ? notifyMcp
+      : Object.assign((message: string) => notifyMcp(message), { incidentScope: definition.name });
+    const label = isDefault ? "LiteLLM MCP" : `LiteLLM MCP (${JSON.stringify(definition.name)})`;
+    let pending = mcpRegistrations.get(definition.name);
+    while (pending) {
+      await waitForMcpRegistration(pending, signal);
       signal?.throwIfAborted();
       if (
         mcpRegistrationFatal ||
         isMcpPaused(auth, credential) ||
         loginGeneration !== mcpLoginGeneration ||
-        registeredMcpIdentity === identity
+        registeredMcpIdentities.get(definition.name) === identity
       )
         return;
+      pending = mcpRegistrations.get(definition.name);
     }
-    if (registeredMcpIdentity === identity) return;
+    if (registeredMcpIdentities.get(definition.name) === identity) return;
 
     const registration = (async () => {
       try {
         signal?.throwIfAborted();
         const { definitions, report } = await createMcpToolDefinitions(
-          (ctx) => (ctx?.modelRegistry ? resolveDefaultRuntimeAuth(ctx) : Promise.resolve(auth)),
-          isVerboseDiscovery() ? (message) => notifyMcp(`LiteLLM MCP: ${message}`, "info") : undefined,
+          (ctx) => (ctx?.modelRegistry ? requireRuntimeAuth(ctx, definition) : Promise.resolve(auth)),
+          isVerboseDiscovery() ? (message) => notifyMcp(`${label}: ${message}`, "info") : undefined,
           signal,
-          notifyMcp,
+          notify,
+          namespace,
         );
         signal?.throwIfAborted();
         if (loginGeneration !== mcpLoginGeneration) return;
@@ -1840,14 +1860,14 @@ export default async function (pi: ExtensionAPI): Promise<void> {
           // Fatal for this instance: report once, with a bounded Pi-authored cause and no proxy text,
           // then stop retrying so a stale instance cannot churn discovery on every later refresh.
           mcpRegistrationFatal = true;
-          reportMcpRegistrationFatal(registeredNames.length, definitions.length, error, notifyMcp);
+          reportMcpRegistrationFatal(registeredNames.length, definitions.length, error, notify);
           return;
         }
-        reportMcpRegistrationSuccess();
-        reportMcpPartialDiscovery(report.partialFailure, registeredNames, notifyMcp);
+        reportMcpRegistrationSuccess(notify);
+        reportMcpPartialDiscovery(report.partialFailure, registeredNames, notify);
         if (isVerboseDiscovery()) {
           notifyMcp(
-            `LiteLLM MCP: registered ${registeredNames.length} of ${definitions.length} prepared MCP tools ` +
+            `${label}: registered ${registeredNames.length} of ${definitions.length} prepared MCP tools ` +
               `(${report.discovered} raw, ${report.enveloped} enveloped).`,
             "info",
           );
@@ -1855,26 +1875,29 @@ export default async function (pi: ExtensionAPI): Promise<void> {
         // A catalog that produced nothing or came from a partial-failure response is not settled:
         // leaving the identity unset lets a later refresh retry discovery, which is network-only and
         // non-blocking. Re-registering surviving tools is safe because Pi replaces tools by name.
-        reportMcpCatalogOutcome(report.discovered, definitions.length, notifyMcp);
-        if (definitions.length > 0 && !report.partialFailure) registeredMcpIdentity = identity;
+        reportMcpCatalogOutcome(report.discovered, definitions.length, notify);
+        if (definitions.length > 0 && !report.partialFailure) registeredMcpIdentities.set(definition.name, identity);
       } catch (error) {
         if (signal?.aborted) throw signal.reason;
         if (loginGeneration !== mcpLoginGeneration) return;
         if (error instanceof McpAccessDeniedError) {
           pauseMcpDiscovery(auth, credential);
-          notifyMcp("LiteLLM MCP: access denied; discovery paused until /login litellm succeeds.");
+          // Aliases have no /login; their pause scope is their URL, key, and headers, so a change lifts it.
+          notifyMcp(
+            `${label}: access denied; discovery paused until ${isDefault ? "/login litellm succeeds" : "its credentials change"}.`,
+          );
           return;
         }
         notifyMcp(
-          `LiteLLM (${PROVIDER_NAME}): MCP tool discovery failed (${error instanceof Error ? error.message : String(error)}).`,
+          `LiteLLM (${definition.name}): MCP tool discovery failed (${error instanceof Error ? error.message : String(error)}).`,
         );
       }
     })();
-    mcpRegistration = registration;
+    mcpRegistrations.set(definition.name, registration);
     try {
       await registration;
     } finally {
-      if (mcpRegistration === registration) mcpRegistration = undefined;
+      if (mcpRegistrations.get(definition.name) === registration) mcpRegistrations.delete(definition.name);
     }
   }
 
@@ -1998,7 +2021,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
             const auth = await authForCredential(definition, context.credential);
             if (loginGeneration === mcpLoginGeneration) {
               defaultRuntimeAuth = auth;
-              void registerMcpTools(auth, context.credential, context.signal).catch(() => undefined);
+              void registerMcpTools(definition, auth, context.credential, context.signal).catch(() => undefined);
             }
           } catch {
             // ignored — authForCredential already reported/will report this via the paths that use it directly.
@@ -2073,6 +2096,40 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     }
     if (!section) return;
     return { systemPrompt: `${event.systemPrompt}\n\n${section}` };
+  });
+
+  // MCP tools otherwise register only from refreshModels' `finally`, which needs
+  // context.allowNetwork. Pi core sets that solely for the interactive TUI and the RPC
+  // background refresh, so `-p` and `--list-models` register no MCP tool at all, even when
+  // credentials resolve and the proxy is reachable — the defect #136 fixed for models.
+  //
+  // Seeding here rather than at activation is deliberate: registerMcpTools serialises callers
+  // per provider, so an activation-time call would become an in-flight registration
+  // that Pi's own refresh then waits on. Running once before the first turn keeps that ordering
+  // intact, still precedes any tool use, and leaves startup latency untouched.
+  async function seedMcpTools(definition: ProviderDefinition): Promise<void> {
+    try {
+      const stored = readStoredCredential(definition.name, join(getAgentDir(), "auth.json"));
+      // executeHelpers:false — seeding must never run the user's key helper as a side effect.
+      const auth = await authForCredential(definition, stored, false);
+      // An env-configured provider has no stored credential and must still seed. The credential
+      // only derives the pause identity, so the resolved key reproduces the stored api_key scope.
+      const credential: Credential = stored ?? { type: "api_key", key: auth.apiKey };
+      await registerMcpTools(definition, auth, credential, AbortSignal.timeout(getSeedTimeoutMs()));
+    } catch (error) {
+      if (isVerboseDiscovery()) {
+        process.stderr.write(
+          `LiteLLM (${definition.name}): MCP seeding skipped (${error instanceof Error ? error.message : String(error)}).\n`,
+        );
+      }
+    }
+  }
+
+  pi.on("before_agent_start", async () => {
+    if (!mcpEnabled || mcpSeeded || discoveryDisabledReason() || isHostOffline()) return;
+    mcpSeeded = true;
+    // Catalogs are independent per provider, so every configured provider seeds in parallel.
+    await Promise.all(definitions.map(seedMcpTools));
   });
 
   pi.on("message_end", (event, ctx) => {
