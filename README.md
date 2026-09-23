@@ -154,6 +154,8 @@ Treat the configured LiteLLM proxy as trusted: Skills can add instructions to th
 /model
 ```
 
+To refresh catalogs on demand, run `/litellm-refresh` for every configured LiteLLM provider, or `/litellm-refresh <provider>` for one alias. It works with `PI_OFFLINE` set, which stops Pi's own `/model` refresh from contacting the network. It contacts only the configured proxies: `LITELLM_OFFLINE=1` and `LITELLM_DISCOVERY_TIMEOUT_MS=0` still disable it, and models.dev enrichment stays off under `PI_OFFLINE`. Each provider reports its model count, the failure, or missing credentials. With LiteLLM MCP enabled, the refresh also re-checks that provider's MCP tools.
+
 Every request routed through a configured LiteLLM provider includes Pi's canonical session ID in the
 `x-litellm-session-id` header. This groups Chat Completions, Responses, and native Messages requests in LiteLLM without
 adding transport-specific fields to request bodies.
@@ -173,7 +175,7 @@ Native Messages authenticates with `x-api-key`; every transport carries the `x-l
 | `LITELLM_GCLOUD_TOKEN_AUTH` | unset | If set to a non-empty value other than `0`, use Google Application Default Credentials as the LiteLLM bearer token source. This takes precedence over `LITELLM_API_KEY_HELPER` and `LITELLM_API_KEY` when no stored `/login litellm` credential exists. |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Google default ADC path | Optional path to an ADC JSON file used by `LITELLM_GCLOUD_TOKEN_AUTH`. If unset, the extension checks the default gcloud ADC locations. |
 | `LITELLM_OFFLINE` | unset | If `1`, disable all model and MCP discovery, including post-login discovery; use cached models only when their stored canonical proxy root exactly matches the active credential root, including any path prefix. URL-standard host casing and default ports are canonicalized, but paths remain case-sensitive. |
-| `PI_OFFLINE` | unset | In Pi 0.85.1, any set value (including `0` or an empty string) disables startup model discovery and `/model` network refreshes. Unset it to allow discovery; cached models can still be used offline. |
+| `PI_OFFLINE` | unset | Pi documents it as disabling automatic network activity, including model catalog refreshes. Through Pi 0.87.1, any set value (including `0` or an empty string) disables startup model discovery and `/model` network refreshes. Run `/litellm-refresh`, or unset it, to discover; cached models can still be used offline. |
 | `LITELLM_DISCOVERY_TIMEOUT_MS` | `5000` | Background and explicit discovery fetch timeout in ms; `0` disables automatic discovery |
 | `LITELLM_CLI_JWT_EXPIRATION_HOURS` | `24` | CLI SSO token lifetime fallback for older proxies whose poll response omits `expires_in`; mirror a non-default proxy setting locally |
 | `LITELLM_VERBOSE_DISCOVERY` | unset | If `1`, enable progress messages during model and MCP discovery (login, refresh, startup), including startup skip reasons, defaulted `/model/info` context windows, and MCP prepared/registered/dropped counts. Progress messages are off by default; MCP safety diagnostics (see below) are always reported regardless of this setting |
@@ -302,7 +304,7 @@ LiteLLM's `/model/info` is the metadata authority, so models.dev enrichment is a
 
 Opening `/model` refreshes configured provider catalogs in the background using Pi's native model lifecycle when network discovery is enabled.
 
-With `LITELLM_VERBOSE_DISCOVERY=1`, disabled startup discovery reports its reason, for example `startup discovery skipped (PI_OFFLINE)`. To allow discovery for one invocation, use `env -u PI_OFFLINE pi` and do not pass `--offline`; `PI_OFFLINE=0` is not sufficient in Pi 0.85.1. If you only want to disable Pi's version check, use `PI_SKIP_VERSION_CHECK=1` instead. This is not a substitute for all offline-mode network restrictions. See [#155](https://github.com/balcsida/pi-provider-litellm/issues/155) and [the upstream issue](https://github.com/earendil-works/pi/issues/8684).
+Pi documents `PI_OFFLINE` and `--offline` as disabling automatic network activity, including model catalog refreshes. Pi 0.87.1 adopted that wording to resolve [earendil-works/pi#8684](https://github.com/earendil-works/pi/issues/8684), without changing the behavior. Pi still checks only whether the variable is set, so `PI_OFFLINE=0` and an empty value also disable model refreshes. With `LITELLM_VERBOSE_DISCOVERY=1`, disabled startup discovery reports its reason, for example `startup discovery skipped (PI_OFFLINE)`. To discover models while keeping `PI_OFFLINE`, run `/litellm-refresh`. To allow all discovery for one invocation, use `env -u PI_OFFLINE pi` and do not pass `--offline`. If you only want to disable Pi's version check, use `PI_SKIP_VERSION_CHECK=1` instead; it does not apply offline mode's other network restrictions. See [#155](https://github.com/balcsida/pi-provider-litellm/issues/155).
 
 ### Model host enforcement
 
@@ -365,6 +367,7 @@ The development probe runs against minimized snapshots with `npm run probe:proxy
 | Symptom | Likely cause |
 |---|---|
 | "no credentials" warning at startup | Env vars not set and no OAuth credential — run `/login litellm` |
+| No models, or no new routes, while `PI_OFFLINE` is set | Pi skips every model network refresh, including the one `/model` starts. Run `/litellm-refresh`, or unset `PI_OFFLINE` (`PI_OFFLINE=0` is not enough) |
 | `No models available` at startup, gone after a restart | A Pi startup race, not discovery — see [`No models available` at startup](#no-models-available-at-startup) |
 | "discovered no models" | Proxy returned an empty list — check pi's startup log and verify `/model/info`, `/v1/models`, or `/health` responds |
 | `/model/info` returning 401/403/404 | Expected behavior with virtual keys — extension falls back to `/v1/models` |

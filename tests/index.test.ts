@@ -210,7 +210,7 @@ describe("extension startup", () => {
     );
     expect(pi.handlers.get("before_provider_headers")).toHaveLength(1);
     expect(pi.handlers.get("before_provider_request")).toHaveLength(1);
-    expect(pi.commands.has("litellm-refresh")).toBe(false);
+    expect(pi.commands.has("litellm-refresh")).toBe(true);
   });
 
   it("warns once per provider and route when a LiteLLM fallback serves the request", async () => {
