@@ -35,6 +35,9 @@
 - ` (no metadata)` is the evidence-free fallback cache enrichment marker. Reduced `/model/info` groups and health
   groups with deployment details use ` (incomplete metadata)`, which remains ineligible for route-name enrichment.
 - Keep `LITELLM_OFFLINE` and `LITELLM_DISCOVERY_TIMEOUT_MS` behavior compatible with README docs.
+- `/litellm-refresh` is the explicit refresh that Pi's `PI_OFFLINE` otherwise blocks. It passes `allowNetwork: true`
+  but keeps the `LITELLM_OFFLINE=1` and zero-timeout gates, and models.dev stays off under `PI_OFFLINE`; do not widen it
+  past the configured proxies.
 - Stored Pi `/login litellm` credentials take precedence over `LITELLM_API_KEY`.
 - Pi stores discovered models in `models-store.json`; models.dev enrichment is opt-in with `LITELLM_MODELS_DEV=1` and
   uses `litellm-models-dev.json` with a 28-day cache window under the Pi agent dir. When it is off, discovery must not

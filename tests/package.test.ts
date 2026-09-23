@@ -351,7 +351,7 @@ describe("pi package compatibility", () => {
     expect(readme).toContain("Different concrete catalog models conflict even within one provider");
     expect(readme).toContain("An unresolved routing or base-model identity denies native Messages");
     expect(readme).toContain("conflicts with a provider-qualified model ID instead receives ` (incomplete metadata)`");
-    expect(readme).not.toContain("/litellm-refresh");
+    expect(readme).toContain("/litellm-refresh");
     expect(readme).toContain("### Model host enforcement");
     expect(readme).toContain("native `Provider` contract has no separate protocol-capability declaration");
     expect(readme).toContain("resolved auth carries `baseUrl` set to the credential's proxy root");

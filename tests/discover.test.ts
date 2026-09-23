@@ -162,71 +162,33 @@ describe("modelProtocol", () => {
     });
   });
 
-  it("uses backend identity, Azure API version, and supported endpoints", () => {
-    expect(
-      modelProtocol("opaque-route", {
-        model_name: "opaque-route",
-        litellm_params: { model: "azure/gpt-5", api_version: "2025-03-01-preview" },
-      }),
-    ).toMatchObject({ api: "openai-responses" });
-    expect(
-      modelProtocol("opaque-route", {
-        model_name: "opaque-route",
-        litellm_params: { model: "azure/gpt-5", api_version: "2024-12-01-preview" },
-      }),
-    ).toMatchObject({ api: "openai-completions" });
-    expect(
-      modelProtocol("opaque-route", {
-        model_name: "opaque-route",
-        litellm_params: { model: "azure/gpt-5" },
-      }),
-    ).toMatchObject({ api: "openai-responses" });
-    expect(
-      modelProtocol("opaque-route", {
-        model_name: "opaque-route",
-        litellm_params: {
-          model: "azure/codex-mini-latest",
-          custom_llm_provider: "azure",
-          api_version: "2025-03-01-preview",
+  it.each(["azure", "azure_ai"])("requires explicit Responses evidence for %s deployments", (provider) => {
+    for (const api_version of [undefined, "2024-12-01-preview", "2025-03-01", "2025-04-01-preview", "v1"]) {
+      for (const evidence of [
+        { litellm_params: { model: `${provider}/gpt-5`, api_version } },
+        { litellm_params: { model: "gpt-5", custom_llm_provider: provider, api_version } },
+        {
+          litellm_params: { model: "gpt-5", api_version },
+          model_info: { mode: "chat", litellm_provider: provider },
         },
-        model_info: { mode: "chat" },
-      }),
-    ).toMatchObject({ api: "openai-responses" });
-
-    for (const model of ["azure_ai/kimi-k3", "azure/deepseek-v4", "azure/glm-5"]) {
-      expect(modelProtocol("opaque-route", { model_name: "opaque-route", litellm_params: { model } })).toMatchObject({
-        api: "openai-completions",
-      });
+      ]) {
+        expect(modelProtocol("opaque-route", evidence)).toMatchObject({ api: "openai-completions" });
+      }
     }
-
-    expect(
-      modelProtocol("openai/gpt-5", {
-        model_name: "openai/gpt-5",
-        model_info: { supported_endpoints: ["/v1/chat/completions"] },
-      }),
-    ).toMatchObject({ api: "openai-completions" });
-    expect(
-      modelProtocol("opaque-route", {
-        model_name: "opaque-route",
-        model_info: { supported_endpoints: ["/v1/responses"] },
-      }),
-    ).toMatchObject({ api: "openai-responses" });
   });
 
-  it("guards Azure API versions when only the reported provider identifies Azure", () => {
-    for (const litellmProvider of ["azure", "azure_ai"]) {
-      const entry = (apiVersion?: string) => ({
-        model_name: "opaque-route",
-        litellm_params: { model: "gpt-5", ...(apiVersion ? { api_version: apiVersion } : {}) },
-        model_info: { litellm_provider: litellmProvider },
-      });
-
-      expect(modelProtocol("opaque-route", entry("2024-12-01-preview"))).toMatchObject({
-        api: "openai-completions",
-      });
-      expect(modelProtocol("opaque-route", entry("2025-03-01-preview"))).toMatchObject({ api: "openai-responses" });
-      expect(modelProtocol("opaque-route", entry())).toMatchObject({ api: "openai-responses" });
-    }
+  it.each([
+    { info: { mode: "responses" }, api: "openai-responses" },
+    { info: { mode: "chat", supported_endpoints: ["/v1/responses"] }, api: "openai-responses" },
+    { info: { mode: "responses", supported_endpoints: ["/v1/chat/completions"] }, api: "openai-completions" },
+    { info: { mode: "responses", supported_endpoints: [] }, api: "openai-completions" },
+  ])("honors explicit Azure transport evidence: $info", ({ info, api }) => {
+    expect(
+      modelProtocol("opaque-route", {
+        litellm_params: { model: "azure/gpt-5", api_version: "2025-04-01-preview" },
+        model_info: info,
+      }),
+    ).toMatchObject({ api });
   });
 
   it("uses Chat Completions when the model prefix conflicts with custom_llm_provider", () => {
@@ -468,6 +430,164 @@ describe("enrichCachedModel reasoning policy", () => {
       xhigh: null,
       max: null,
     });
+  });
+});
+
+describe("context window fallback diagnostic", () => {
+  // Reported routes are remembered per process, so each case starts from a fresh module.
+  let discover: typeof discoverModels;
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ discoverModels: discover } = await import("../src/discover.js"));
+    vi.stubEnv("LITELLM_VERBOSE_DISCOVERY", "1");
+    vi.stubEnv("LITELLM_DEFAULT_CONTEXT_WINDOW", undefined);
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each([undefined, null])("reports a defaulted window for limit %s with an escaped route", async (limit) => {
+    const route = 'private"\n\u001b[31m';
+    mockEndpoints({
+      "/model/info": () =>
+        jsonResponse(200, { data: [{ model_name: route, model_info: { mode: "chat", max_input_tokens: limit } }] }),
+    });
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+    const result = await discover("https://litellm.example.com", "sk-test", { modelsDev: false });
+
+    expect(result.models[0]).toMatchObject({ contextWindow: 128000, maxTokens: 16384 });
+    expect(stderr).toHaveBeenCalledTimes(1);
+    const message = String(stderr.mock.calls[0]?.[0]);
+    expect(message).toContain('"private\\"\\n\\u001b[31m"');
+    expect(message).toContain("1 route(s) default contextWindow to 128000");
+    expect(message).toContain("model_info.max_input_tokens");
+    expect(message.trimEnd()).not.toContain("\n");
+    expect(message).not.toContain("\u001b");
+  });
+
+  it.each([undefined, "0", "true"])("stays quiet with LITELLM_VERBOSE_DISCOVERY=%s", async (verbose) => {
+    vi.stubEnv("LITELLM_VERBOSE_DISCOVERY", verbose);
+    mockEndpoints({
+      "/model/info": () => jsonResponse(200, { data: [{ model_name: "private-route", model_info: { mode: "chat" } }] }),
+    });
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+    const result = await discover("https://litellm.example.com", "sk-test", { modelsDev: false });
+
+    expect(result.models[0]?.contextWindow).toBe(128000);
+    expect(stderr).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { source: "explicit", limit: 128000, backend: undefined },
+    { source: "catalog", limit: undefined, backend: "openai/gpt-4o" },
+  ])("does not mistake a $source window equal to the default for a fallback", async ({ limit, backend }) => {
+    mockEndpoints({
+      "/model/info": () =>
+        jsonResponse(200, {
+          data: [
+            {
+              model_name: "private-route",
+              litellm_params: { model: backend },
+              model_info: { mode: "chat", max_input_tokens: limit },
+            },
+          ],
+        }),
+    });
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+    const result = await discover("https://litellm.example.com", "sk-test", { modelsDev: false });
+
+    expect(result.models[0]?.contextWindow).toBe(128000);
+    expect(stderr).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { knownLimit: 64000, expected: 64000, warns: false },
+    { knownLimit: 1048576, expected: 922000, warns: true },
+  ])("reports only a winning configured fallback beside limit $knownLimit", async ({ knownLimit, expected, warns }) => {
+    vi.stubEnv("LITELLM_DEFAULT_CONTEXT_WINDOW", "922000");
+    const rows = [
+      { model_name: "private-route", model_info: { mode: "chat", max_input_tokens: knownLimit } },
+      { model_name: "private-route", model_info: { mode: "chat" } },
+    ];
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    for (const data of [rows, [...rows].reverse()]) {
+      stderr.mockClear();
+      vi.resetModules();
+      ({ discoverModels: discover } = await import("../src/discover.js"));
+      mockEndpoints({ "/model/info": () => jsonResponse(200, { data }) });
+
+      const result = await discover("https://litellm.example.com", "sk-test", { modelsDev: false });
+
+      expect(result.models[0]?.contextWindow).toBe(expected);
+      if (warns) {
+        expect(stderr.mock.calls).toEqual([[expect.stringContaining("default contextWindow to 922000")]]);
+      } else {
+        expect(stderr).not.toHaveBeenCalled();
+      }
+    }
+  });
+
+  it("reports each published wildcard child once, excluding exact and tighter measured routes", async () => {
+    mockEndpoints({
+      "/model/info": () =>
+        jsonResponse(200, {
+          data: [
+            { model_name: "private/*", model_info: { mode: "chat" } },
+            { model_name: "private/small*", model_info: { mode: "chat", max_input_tokens: 64000 } },
+            { model_name: "private/exact", model_info: { mode: "chat", max_input_tokens: 128000 } },
+          ],
+        }),
+      "/v1/models": () =>
+        jsonResponse(200, {
+          data: ["private/child", "private/child", "private/exact", "private/small-child"].map((id) => ({ id })),
+        }),
+    });
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+    const result = await discover("https://litellm.example.com", "sk-test", { modelsDev: false });
+
+    expect(result.models.map(({ id, contextWindow }) => [id, contextWindow]).sort()).toEqual([
+      ["private/child", 128000],
+      ["private/exact", 128000],
+      ["private/small-child", 64000],
+    ]);
+    expect(stderr.mock.calls).toEqual([
+      [
+        expect.stringMatching(
+          /^LiteLLM discovery: 1 route\(s\) default contextWindow to 128000; .*: "private\/child"\n$/,
+        ),
+      ],
+    ]);
+  });
+
+  it.each(["chat", "embedding"])("does not report unpublished %s routes", async (mode) => {
+    mockEndpoints({
+      "/model/info": () => jsonResponse(200, { data: [{ model_name: "private/*", model_info: { mode } }] }),
+      "/v1/models": () => jsonResponse(200, { data: [] }),
+    });
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+    const result = await discover("https://litellm.example.com", "sk-test", { modelsDev: false });
+
+    expect(result.models).toEqual([]);
+    expect(stderr.mock.calls.join("\n")).not.toContain("default contextWindow");
+  });
+
+  it("reports many defaulted routes on one bounded line, once per process", async () => {
+    const data = Array.from({ length: 50 }, (_, index) => ({
+      model_name: `route-${index}`,
+      model_info: { mode: "chat" },
+    }));
+    mockEndpoints({ "/model/info": () => jsonResponse(200, { data }) });
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+    await discover("https://litellm.example.com", "sk-test", { modelsDev: false });
+    await discover("https://litellm.example.com", "sk-test", { modelsDev: false });
+
+    expect(stderr.mock.calls).toEqual([
+      [expect.stringMatching(/^LiteLLM discovery: 50 route\(s\) default contextWindow to 128000; .* \(\+47 more\)\n$/)],
+    ]);
   });
 });
 
@@ -891,6 +1011,60 @@ describe("discoverModels via /model/info", () => {
 
     expect(result.models[0]).toMatchObject({ id: "gpt-prod", api: "openai-completions" });
     expect(result.models[0]).not.toHaveProperty("litellmBackendFamily");
+  });
+
+  it.each([false, true])(
+    "keeps an Azure group on Chat when a sibling lacks Responses evidence (%s)",
+    async (explicitSibling) => {
+      mockEndpoints({
+        "/model/info": () =>
+          jsonResponse(200, {
+            data: [false, explicitSibling].map((responses, index) => ({
+              model_name: "azure-chat-route",
+              litellm_params: { model: "azure/gpt-5", api_version: "2025-04-01-preview" },
+              model_info: {
+                id: `deployment-${index}`,
+                mode: responses ? "responses" : "chat",
+                supports_reasoning: true,
+                supported_openai_params: ["reasoning_effort"],
+              },
+            })),
+          }),
+      });
+
+      const result = await discoverModels("https://litellm.example.com", "sk-test", { modelsDev: false });
+
+      expect(result.models[0]).toMatchObject({
+        api: "openai-completions",
+        reasoning: true,
+        compat: { supportsReasoningEffort: true },
+      });
+      expect(getSupportedThinkingLevels(result.models[0] as never)).toContain("medium");
+    },
+  );
+
+  it.each(["azure", "azure_ai"])("preserves %s-specific context limits through discovery", async (provider) => {
+    mockEndpoints({
+      "/model/info": () =>
+        jsonResponse(200, {
+          data: [
+            {
+              model_name: "large-context-route",
+              litellm_params: { model: `${provider}/gpt-5.6-sol` },
+              model_info: {
+                mode: "chat",
+                litellm_provider: provider,
+                max_input_tokens: 1_050_000,
+                max_output_tokens: 128_000,
+              },
+            },
+          ],
+        }),
+    });
+
+    const result = await discoverModels("https://litellm.example.com", "sk-test", { modelsDev: false });
+
+    expect(result.models[0]).toMatchObject({ contextWindow: 1_050_000, maxTokens: 128_000 });
   });
 
   it("reduces mixed Azure deployment versions to Chat Completions", async () => {
@@ -2728,7 +2902,7 @@ describe("discoverModels via /model/info", () => {
       });
 
       expect(result.models[0]).toMatchObject({
-        api: "openai-responses",
+        api: "openai-completions",
         thinkingLevelMap: { off: null, minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: null },
       });
     },
@@ -3417,6 +3591,27 @@ describe("discoverModels via /model/info", () => {
       maxTokensField: "max_tokens",
     });
     expect(result.models[0]?.litellmPolicy?.normalizeStrictToolMessages).toBe(true);
+  });
+
+  it("applies Kimi compat to a Fireworks account-scoped path routed by custom_llm_provider", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    mockEndpoints({
+      "/model/info": () =>
+        jsonResponse(200, {
+          data: [
+            {
+              model_name: "fireworks/kimi-k2p6",
+              litellm_params: { model: "accounts/fireworks/models/kimi-k2p6", custom_llm_provider: "fireworks_ai" },
+              model_info: { id: "one", mode: "chat" },
+            },
+          ],
+        }),
+    });
+
+    const result = await discoverModels("https://litellm.example.com", "sk-test", {});
+
+    expect(result.models[0]?.compat).toMatchObject({ maxTokensField: "max_tokens", supportsStrictMode: false });
+    expect(stderr.mock.calls.flat().join(" ")).not.toContain("conflicting deployment family evidence");
   });
 
   it("keeps strict repair but withholds visibility suppression for mixed Kimi thinking modes", async () => {
