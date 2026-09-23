@@ -154,6 +154,8 @@ Treat the configured LiteLLM proxy as trusted: Skills can add instructions to th
 /model
 ```
 
+To refresh catalogs on demand, run `/litellm-refresh` for every configured LiteLLM provider, or `/litellm-refresh <provider>` for one alias. It works with `PI_OFFLINE` set, which stops Pi's own `/model` refresh from contacting the network. It contacts only the configured proxies: `LITELLM_OFFLINE=1` and `LITELLM_DISCOVERY_TIMEOUT_MS=0` still disable it, and models.dev enrichment stays off under `PI_OFFLINE`. Each provider reports its model count, the failure, or missing credentials. With LiteLLM MCP enabled, the refresh also re-checks that provider's MCP tools.
+
 Every request routed through a configured LiteLLM provider includes Pi's canonical session ID in the
 `x-litellm-session-id` header. This groups Chat Completions, Responses, and native Messages requests in LiteLLM without
 adding transport-specific fields to request bodies.

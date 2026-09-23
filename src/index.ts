@@ -1775,11 +1775,15 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     };
   }
 
+  function missingCredentials(definition: ProviderDefinition): string {
+    const fix = definition.name === PROVIDER_NAME ? "Run /login litellm or set env vars" : "Set its baseUrl and apiKey";
+    return `no credentials for ${definition.name}. ${fix}.`;
+  }
+
   async function requireRuntimeAuth(ctx: ExtensionContext, definition = definitions[0]!): Promise<LiteLLMRuntimeAuth> {
     const auth = await getRuntimeAuth(ctx, definition);
     if (auth) return auth;
-    const fix = definition.name === PROVIDER_NAME ? "Run /login litellm or set env vars" : "Set its baseUrl and apiKey";
-    throw new Error(`no credentials for ${definition.name}. ${fix}.`);
+    throw new Error(missingCredentials(definition));
   }
 
   async function resolveDefaultRuntimeAuth(ctx?: ExtensionContext): Promise<LiteLLMRuntimeAuth> {
@@ -1948,6 +1952,9 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   }
 
   const seeded = await Promise.all(definitions.map(seedModels));
+  // Pi runs a provider's network phase only once a credential resolves, so /litellm-refresh reads an
+  // unchanged count as "no credentials" rather than as a successful refresh.
+  const networkRefreshAttempts = new Map<string, number>();
 
   for (const [index, definition] of definitions.entries()) {
     const auth = createProviderAuth(
@@ -2008,6 +2015,9 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     const refreshModels = provider.refreshModels!;
     provider.refreshModels = async (context) => {
       const loginGeneration = mcpLoginGeneration(definition.name);
+      if (context.allowNetwork) {
+        networkRefreshAttempts.set(definition.name, (networkRefreshAttempts.get(definition.name) ?? 0) + 1);
+      }
       try {
         await refreshModels(context);
       } finally {
@@ -2033,6 +2043,54 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     };
     pi.registerProvider(provider);
   }
+
+  // Pi documents PI_OFFLINE as disabling model catalog refreshes, including the one /model starts, and a
+  // provider cannot tell that refresh from an automatic one. This is the explicit refresh: it reaches only
+  // the configured proxies, so LITELLM_OFFLINE=1 and a zero timeout still disable it and models.dev stays off.
+  pi.registerCommand("litellm-refresh", {
+    description: "Refresh LiteLLM model catalogs from the proxy, even with PI_OFFLINE set",
+    getArgumentCompletions: (prefix) => {
+      const matches = [...providerNames].filter((name) => name.startsWith(prefix));
+      return matches.length > 0 ? matches.map((name) => ({ value: name, label: name })) : null;
+    },
+    handler: async (args, ctx) => {
+      const notify = (message: string, level: "info" | "warning"): void => {
+        if (ctx.hasUI) ctx.ui.notify(message, level);
+        else process.stderr.write(`${message}\n`);
+      };
+      const disabledReason = discoveryDisabledReason();
+      if (disabledReason) {
+        notify(`LiteLLM: model refresh skipped (${disabledReason}).`, "warning");
+        return;
+      }
+      const requested = args.trim();
+      const selected = requested ? definitions.filter(({ name }) => name === requested) : definitions;
+      if (selected.length === 0) {
+        const configured = [...providerNames].map((name) => JSON.stringify(name)).join(", ");
+        notify(`LiteLLM: unknown provider ${JSON.stringify(requested)}; configured: ${configured}.`, "warning");
+        return;
+      }
+      const attempts = new Map(selected.map(({ name }) => [name, networkRefreshAttempts.get(name) ?? 0]));
+      const result = await ctx.modelRegistry.refresh({
+        providers: selected.map(({ name }) => name),
+        allowNetwork: true,
+        force: true,
+      });
+      const models = ctx.modelRegistry.getAll();
+      for (const definition of selected) {
+        const label = `LiteLLM (${JSON.stringify(definition.name)})`;
+        const error = result.errors.get(definition.name);
+        if (error) {
+          notify(`${label}: model refresh failed (${error.message}).`, "warning");
+        } else if ((networkRefreshAttempts.get(definition.name) ?? 0) === attempts.get(definition.name)) {
+          notify(`${label}: model refresh skipped; ${missingCredentials(definition)}`, "warning");
+        } else {
+          const count = models.filter((model) => model.provider === definition.name).length;
+          notify(`${label}: refreshed ${count} model${count === 1 ? "" : "s"}.`, "info");
+        }
+      }
+    },
+  });
 
   setupLiteLLMCostTracking(pi, [...providerNames]);
 
